@@ -1,0 +1,4 @@
+# The verifier reports BLOCKED when the evidence file is missing.
+role = "verifier"
+inputs = ["sdlc/work/20260101-missing/evidence.md", "sdlc/evals/fixtures/pr-description.md"]
+check = "grep -Eiq 'verdict[^a-z]*blocked' \"$EVAL_OUTPUT\""

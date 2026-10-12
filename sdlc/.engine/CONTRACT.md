@@ -180,7 +180,7 @@ class RoleSpec:
 
 def parse_role_spec(path: Path) -> RoleSpec
 def read_bot_token(path: str | Path) -> str
-def build_invocation(spec, harness: str, config: dict, inputs=(), base_env=None, dry_run=False) -> tuple[list[str], dict[str, str]]
+def build_invocation(spec, harness: str, config: dict, inputs=(), base_env=None, dry_run=False, task=None) -> tuple[list[str], dict[str, str]]
 def execute(argv: list[str], env: dict[str, str], cwd: Path) -> int
 def cleanup(env: dict[str, str]) -> None
 ```
@@ -190,11 +190,12 @@ def cleanup(env: dict[str, str]) -> None
 - `build_invocation`:
   1. Read the table `config["agent_runner"][harness]`. Raise `SdlcError` when it is absent.
   2. `argv = command + flags + [prompt]`. `flags` is the map of the strongest of `edit`, `run`, `read` in the spec. A missing map for a needed capability raises `SdlcError`.
-  3. `prompt` is the spec body, then a line `Inputs:`, then one line per input path.
+  3. `prompt` is the spec body, then (when `task` is set) a line `Task:`, the task text, and a blank line, then a line `Inputs:`, then one line per input path.
   4. `env` is a copy of `base_env` (default: `os.environ`) plus `ISOLATION_ENV`. The copy drops the names in `HUMAN_TOKEN_VARS` and `ASKPASS_VARS`, every name that starts with `ASKPASS_PREFIX`, every name with a `GH` or `GITHUB` word and a `TOKEN` or `PAT` word, and every value with the shape of a GitHub token (the `token:github` leak patterns). Then the entries of `GIT_ISOLATION_CONFIG` go at index n and up, where n is the `GIT_CONFIG_COUNT` of the copy (0 when it is absent or not a number that is 0 or more). `GIT_CONFIG_COUNT` becomes n plus 2. The entries below n stay.
   5. Only when `github-bot` is in the capabilities: set `env["GH_TOKEN"]` to `read_bot_token(config["bot"]["token_file"])`. With `dry_run=True`, do not read the file. Set `env["GH_TOKEN"]` to `DRY_RUN_TOKEN`.
   6. Set `env["GH_CONFIG_DIR"]` to a new empty temp folder, so `gh` cannot find the stored human login. The caller removes it with `cleanup(env)`.
 - `execute` runs `subprocess.run(argv, env=env, cwd=cwd)` and returns the exit code. A missing command raises `SdlcError`.
+- No-edit check (D20). `execute_checked(spec, argv, env, cwd) -> int` runs `execute`. When `edit` is not in the capabilities (`needs_no_edit_check`), it takes `snapshot(cwd)` before and after the role: the HEAD commit, and for each path in `git status --porcelain=v1 -z --untracked-files=all` its status and a SHA-256 of its content. So a further edit to a file that was already dirty is found. `changed_paths(before, after)` lists every path whose status or content changed, and HEAD when it moved, except paths under `sdlc/work/`. When the list is not empty, it raises `NoEditViolation` (an `SdlcError`) with the exit code `NO_EDIT_EXIT` (3). The message names the role, says "Review or discard these changes. The engine did not undo them.", and lists one path per line. The check detects only. It never reverts. It runs for every harness and needs no harness flag. Files that `.gitignore` ignores are out of scope. A role with `edit` is not checked. A dry run does not run the role and does not check.
 
 ## 10. scan
 
@@ -240,7 +241,7 @@ def export(skill_dir: Path, out: Path, require_denylist: bool = True) -> Path
 | `eject <relpath> [--stage-dir] [--repo]` | `overlay.eject` |
 | `work new <title> --lane fast\|full [--repo]` | `workitem.new_item` |
 | `work show <id> [--repo]` | `workitem.show_item` |
-| `role <name-or-path> --harness <h> [--stage-dir] [--input FILE ...] [--repo] [--dry-run]` | `overlay.resolve("agents/<name>.md")` for a name, `role.parse_role_spec`, `common.load_config`, `role.build_invocation`, `role.execute`, `role.cleanup`. A value with a `/` or a `.md` suffix is a path |
+| `role <name-or-path> --harness <h> [--stage-dir] [--input FILE ...] [--task TEXT] [--repo] [--dry-run]` | `overlay.resolve("agents/<name>.md")` for a name, `role.parse_role_spec`, `common.load_config`, `role.build_invocation`, `role.execute_checked`, `role.cleanup`. Exit 3 on a no-edit violation. A value with a `/` or a `.md` suffix is a path |
 | `leak-scan <dir>` | `scan.leak_scan`. Exit 1 on any hit. A notice on stderr when the denylist is missing or empty |
 | `lint-portable <dir>` | `scan.lint_portable`. Exit 1 on any hit |
 | `export <skill-dir> --out <dir> [--no-denylist]` | `export.export` |
@@ -248,7 +249,10 @@ def export(skill_dir: Path, out: Path, require_denylist: bool = True) -> Path
 | `pr --title T [--body B \| --body-file F] [--head] [--base] [--repo]` | `github.open_pr`. Prints the URL |
 | `gates apply [--repo]` | `gates.apply` |
 | `check-bot [--repo]` | `gates.check_bot`. Prints one line per rule. Exit 1 on any FAIL |
-| `checks` | The `sdlc-checks` CI job. No checks yet. Later slices add test-lock and eval-gate |
+| `checks [--base SHA --head SHA] [--repo]` | The `sdlc-checks` CI job (section 15). Runs the test-lock seam (S3 fills it) and `evals.eval_gate`. With `--base` and `--head`, it reads a local repo through `evals.GitSource`. Else it reads the pull request in `GITHUB_EVENT_PATH` through `evals.ApiSource`. With neither, it prints a notice and exits 0. Exit 1 on any FAIL |
+| `verify <id> [--upstream LINK ...] [--fallback TEXT] [--max-runs N] [--stage-dir] [--repo]` | `verify.settings`, `verify.run_verify`, `verify.write_evidence`. Exit 1 when the verdict is FAIL |
+| `propose-verify [--repo]` | `verify.propose`. Prints one proposal per line |
+| `run-evals --harness <h> [--task NAME ...] [--stage-dir] [--repo]` | `evals.run_evals` |
 | `version` | prints `VERSION` |
 
 `sdlc.py` imports each module inside its handler. A missing or unfinished module breaks only its own command. Exit 0 on success. On failure, `sdlc.py` prints one line that starts with `error: ` and exits non-zero. A file that is not UTF-8 text gives one such line. Ctrl-C gives one such line and exit code 130. When the reader closes stdout, for example `| head`, the command sends the rest of stdout to `os.devnull` and exits 1 with no message. `--dry-run` prints the argv and the env key names, never env values. It does not read the bot token file.
@@ -275,10 +279,45 @@ The engine has no merge, approve, or deployment-approval call (FR-10).
 
 `gates` uses the human login, because only a repo admin can change or fully read the rules.
 
-- `ruleset_payload()`: ruleset `opieworks-sdlc` on `~DEFAULT_BRANCH`, active, no bypass actors. Rules: `pull_request` with 1 approval, code-owner review, dismiss stale reviews on push, approval of the last push. `required_status_checks` with `sdlc-checks`.
+- `ruleset_payload()`: ruleset `opieworks-sdlc` on `~DEFAULT_BRANCH`, active. The only bypass actor is the repository admin role (`bypass_mode` always). Rules: `pull_request` with 1 approval, code-owner review, dismiss stale reviews on push, approval of the last push. `required_status_checks` with `sdlc-checks`. `update` with `update_allows_fetch_and_merge` false (C5: the bot cannot merge after an approval; the admin merges through the bypass).
 - `apply(slug, config) -> list[str]`: refuses until the default branch has `.github/workflows/sdlc-checks.yml` (FR-93). Creates or updates the ruleset by name. Sets environment `production` with the user in `codeowners.owner` as the required reviewer, self-review prevented, and custom branch policies. Makes the default branch the only deployment branch policy. Refuses when `codeowners.owner` is missing, a team, or the bot.
-- `check_bot(slug, config) -> list[RuleResult]`: one result per rule: `codeowners-present`, `bot-not-code-owner`, `bot-no-admin-rights` (role read, triage, or write), `pr-required`, `code-owner-review`, `dismiss-stale-approvals`, `approve-latest-push`, `required-check`, `no-bot-bypass` (only the admin role may bypass), `env-human-reviewer`, `env-prevent-self-review`, `env-main-only`. Branch rules come from the effective rules of the default branch.
+- `check_bot(slug, config) -> list[RuleResult]`: one result per rule: `codeowners-present`, `bot-not-code-owner`, `bot-no-admin-rights` (role read, triage, or write), `pr-required`, `code-owner-review`, `dismiss-stale-approvals`, `approve-latest-push`, `required-check`, `no-bot-bypass` (only the admin role may bypass), `restrict-updates` (an `update` rule is on), `env-human-reviewer`, `env-prevent-self-review`, `env-main-only`. Branch rules come from the effective rules of the default branch.
 
 FR-93: every stage installs `core/templates/sdlc-checks.yml` as `.github/workflows/sdlc-checks.yml` (managed) and the core CODEOWNERS paths. The job runs on `pull_request_target`, checks out the base commit, and runs `python3 sdlc/.engine/sdlc.py checks`.
 
 `tests/live/scn5_gate_integrity.py` is the live SCN-5 and C5 test. unittest does not run it.
+
+## 14. verify (S1)
+
+```python
+CONFIG_TABLE = "testing"   # keys: verify (str), max_runs (int >= 1)
+def settings(config) -> tuple[str, int]
+def run_verify(command: str, repo: Path, max_runs: int, runner=None) -> VerifyResult
+def write_evidence(item_id, repo, stage_dir, result, links=None, fallback=None) -> Path
+def propose(repo) -> list[tuple[str, str]]   # (command, reason), best first
+```
+
+- `run_verify` runs the command in a shell in the repo, with stdout and stderr together. It stops at the first exit code 0, else after `max_runs` runs. `VerifyResult.verdict` is `PASS`, `PASS AFTER RETRY`, or `FAIL`. An empty command raises `SdlcError`.
+- `write_evidence` fills `templates/evidence.md` (overlay first) and writes `sdlc/work/<id>/evidence.md`. It makes the work item folder when it is absent. Placeholders: `work_item`, `upstream`, `verify_command`, `max_runs`, `run_count`, `verdict`, `runs`, `report_pending`. An unknown placeholder raises `SdlcError`. The raw output of each run goes in a fenced block whose fence is longer than any backtick run in the output (NFR-7).
+- `upstream`: the `links` when given, else the names of `intent.md`, `spec.md`, and `plan.md` in the folder, else `none, used <fallback>` with the default fallback `PR description and diff` (FR-3).
+- `propose` reads repo files only. It runs nothing.
+
+## 15. evals (S1)
+
+```python
+TASKS_REL = "sdlc/evals/tasks"
+RESULT_REL = "sdlc/evals/results/latest.json"
+def is_watched(path: str) -> bool
+def watch_hash(entries) -> str          # entries: (mode, path, blob sha)
+class GitSource(repo); class ApiSource(slug, env=None)   # blobs(rev), read(rev, path), merge_base(a, b)
+def eval_gate(source, base, head) -> GateResult           # .ok, .lines
+def load_tasks(repo, names=None) -> list[Task]
+def run_evals(repo, stage_dir, harness, names=None, now=None) -> tuple[dict, Path]
+```
+
+- Watched paths: every file named `AGENTS.md`, and every path under `sdlc/` except `sdlc/work/` and `sdlc/evals/results/`.
+- `watch_hash` is the SHA-256 of the sorted lines `<mode> <blob sha>\t<path>` of the watched blobs. Git and the GitHub tree API give the same blob IDs, so a local hash and a CI hash match.
+- A source reads trees and blobs only. It never checks out or runs a commit (FR-93).
+- `eval_gate`: the PR changes a watched path when the watched blobs differ between the merge base and the head. No change: PASS. A change and no result on the base: PASS with a notice. A change and no result on the head, a result that is not valid, a hash that does not match the head, or a pass rate below the base result: FAIL.
+- A task file has `role` and `check` (required), and `prompt`, `inputs`, `setup` (optional). Other keys raise `SdlcError`.
+- `run_evals` refuses uncommitted changes in watched paths. It runs each task in a temporary detached worktree of `HEAD`: the `setup` command, then the role through `role.build_invocation` with the task `prompt` as `task` and stdin closed, then the `check` command with `EVAL_OUTPUT` (the file with the role output) and `EVAL_ROLE_EXIT`. A task passes when the role and the check exit with 0. The result holds `format`, `harness`, `head`, `watch_hash`, `created`, `tasks_total`, `tasks_passed`, `pass_rate`, and per task the raw `setup_log`, `role_log`, and `check_log`.

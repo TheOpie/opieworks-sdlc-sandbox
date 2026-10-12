@@ -138,10 +138,88 @@ def cmd_check_bot(args):
     return 1 if failed else 0
 
 
+def _test_lock(source, base, head):
+    """The test-lock check (FR-41). Slice S3 builds it. It finds nothing yet."""
+    return ["test-lock: not installed yet."], True
+
+
 def cmd_checks(args):
-    # The sdlc-checks CI job runs this from the base-branch engine copy.
-    # Later slices add the test-lock and eval-gate checks (FR-41, FR-52).
-    print("sdlc-checks: no checks are installed yet.")
+    """The sdlc-checks CI job. It runs from the base-branch engine copy (FR-93).
+
+    It reads the PR head only as data: trees and blobs from git or the
+    GitHub API. It never checks out or runs PR head code.
+    """
+    from sdlc_lib import evals
+
+    if (args.base is None) != (args.head is None):
+        from sdlc_lib.common import SdlcError
+
+        raise SdlcError("Give both --base and --head, or neither.")
+    if args.base is not None:
+        found = (evals.GitSource(_repo(args)), args.base, args.head)
+    elif os.environ.get("GITHUB_EVENT_PATH") and os.environ.get("GITHUB_REPOSITORY"):
+        found = evals.event_source(os.environ["GITHUB_EVENT_PATH"], os.environ["GITHUB_REPOSITORY"])
+    else:
+        found = None
+    if found is None:
+        print("sdlc-checks: no pull request to check. Give --base and --head to check two commits.")
+        return 0
+    source, base, head = found
+    ok = True
+    for check in (_test_lock, lambda s, b, h: _eval_gate(evals, s, b, h)):
+        lines, passed = check(source, base, head)
+        for line in lines:
+            print(line)
+        ok = ok and passed
+    print("sdlc-checks: " + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+def _eval_gate(evals, source, base, head):
+    result = evals.eval_gate(source, base, head)
+    return result.lines, result.ok
+
+
+def cmd_verify(args):
+    from sdlc_lib import common, verify
+
+    repo = _repo(args)
+    stage_dir = _stage_dir(args)
+    config = common.load_config(repo)
+    command, max_runs = verify.settings(config)
+    if args.max_runs is not None:
+        max_runs = args.max_runs
+    verify.check_item_id(args.item_id)
+    result = verify.run_verify(command, repo, max_runs)
+    path = verify.write_evidence(args.item_id, repo, stage_dir, result, links=args.upstream, fallback=args.fallback)
+    for attempt in result.attempts:
+        print("run {} of {}: exit code {}".format(attempt.number, result.max_runs, attempt.exit_code))
+    print("verdict: " + result.verdict)
+    print("wrote " + path.relative_to(repo).as_posix())
+    return 0 if result.passed else 1
+
+
+def cmd_propose_verify(args):
+    from sdlc_lib import verify
+
+    found = verify.propose(_repo(args))
+    if not found:
+        print("No verify command found. Ask the human for the command that proves the repo works.")
+        return 0
+    for command, reason in found:
+        print("{}    ({})".format(command, reason))
+    return 0
+
+
+def cmd_run_evals(args):
+    from sdlc_lib import evals
+
+    repo = _repo(args)
+    result, path = evals.run_evals(repo, _stage_dir(args), args.harness, names=args.task or None)
+    for task in result["tasks"]:
+        print("{} {}".format("PASS" if task["passed"] else "FAIL", task["name"]))
+    print("pass rate: {} of {}".format(result["tasks_passed"], result["tasks_total"]))
+    print("wrote " + path.relative_to(repo).as_posix())
     return 0
 
 
@@ -209,13 +287,13 @@ def cmd_role(args):
     spec = role.parse_role_spec(_role_spec_path(args.spec, args, repo))
     config = common.load_config(repo)
     inputs = [_input_path(item, repo) for item in args.input]
-    argv, env = role.build_invocation(spec, args.harness, config, inputs=inputs, dry_run=args.dry_run)
+    argv, env = role.build_invocation(spec, args.harness, config, inputs=inputs, dry_run=args.dry_run, task=args.task)
     try:
         if args.dry_run:
             print("argv: " + " ".join(shlex.quote(a) for a in argv))
             print("env keys: " + " ".join(sorted(env)))
             return 0
-        return role.execute(argv, env, repo)
+        return role.execute_checked(spec, argv, env, repo)
     finally:
         role.cleanup(env)
 
@@ -293,7 +371,30 @@ def build_parser():
     p.set_defaults(func=cmd_check_bot)
 
     p = sub.add_parser("checks", help="Run the sdlc-checks CI job.")
+    p.add_argument("--base", help="Base commit. Default: the pull request in GITHUB_EVENT_PATH.")
+    p.add_argument("--head", help="Head commit. The checks read it as data only.")
+    p.add_argument("--repo", help="Repo for --base and --head. Default: the repo of the current folder.")
     p.set_defaults(func=cmd_checks)
+
+    p = sub.add_parser("verify", help="Run the verify loop and write evidence.md.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-fix-login.")
+    p.add_argument("--upstream", action="append", default=[], help="Upstream link. Repeat for more links.")
+    p.add_argument("--fallback", help="What the stage used with no upstream artifact. Default: PR description and diff.")
+    p.add_argument("--max-runs", type=int, help="Run limit for this call. Default: testing.max_runs in the config.")
+    p.add_argument("--stage-dir", help="Stage skill folder. Default: the skill folder that holds this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("propose-verify", help="Propose a verify command for the repo.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_propose_verify)
+
+    p = sub.add_parser("run-evals", help="Run the eval tasks and write the eval result.")
+    p.add_argument("--harness", required=True, help="Name of an [agent_runner.<harness>] table.")
+    p.add_argument("--task", action="append", default=[], help="Run only this task. Repeat for more tasks.")
+    p.add_argument("--stage-dir", help="Stage skill folder for role names. Default: the skill folder that holds this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_run_evals)
 
     for name, func, text in (
         ("resolve", cmd_resolve, "Print the file that a relative path resolves to."),
@@ -326,6 +427,7 @@ def build_parser():
     )
     p.add_argument("--harness", required=True, help="Name of an [agent_runner.<harness>] table.")
     p.add_argument("--input", action="append", default=[], help="Input file. Repeat for more files.")
+    p.add_argument("--task", help="Task text for the role. It goes in the prompt after the role spec.")
     p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
     p.add_argument("--dry-run", action="store_true", help="Print the argv and the env key names only.")
     p.set_defaults(func=cmd_role)

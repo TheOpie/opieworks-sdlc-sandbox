@@ -41,7 +41,9 @@ def ruleset_payload() -> dict:
         "name": RULESET_NAME,
         "target": "branch",
         "enforcement": "active",
-        "bypass_actors": [],
+        # C5: only an admin can update the default branch, so the bot cannot
+        # merge a PR after a human approves it. The admin merges through the bypass.
+        "bypass_actors": [{"actor_type": "RepositoryRole", "actor_id": ADMIN_ROLE_ID, "bypass_mode": "always"}],
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
         "rules": [
             {
@@ -61,6 +63,7 @@ def ruleset_payload() -> dict:
                     "required_status_checks": [{"context": REQUIRED_CHECK}],
                 },
             },
+            {"type": "update", "parameters": {"update_allows_fetch_and_merge": False}},
         ],
     }
 
@@ -200,6 +203,10 @@ def check_bot(slug: str, config: dict) -> list[RuleResult]:
             if not admin and actor.get("actor_type") != "OrganizationAdmin":
                 bad.append(f"{actor.get('actor_type')}:{actor.get('actor_id')}")
     add("no-bot-bypass", not bad, "bypass actors: " + ", ".join(bad) if bad else "only admins can bypass")
+    updates = [r.get("parameters") or {} for r in rules if r.get("type") == "update"]
+    restricted = any(p.get("update_allows_fetch_and_merge") is not True for p in updates)
+    add("restrict-updates", restricted, "only a bypass actor can update the branch" if restricted
+        else "no update rule, so the bot can merge after an approval")
 
     try:
         env = github.api("GET", f"repos/{slug}/environments/{ENVIRONMENT}")

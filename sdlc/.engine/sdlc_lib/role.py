@@ -211,11 +211,13 @@ def build_invocation(
     inputs: list[str] | tuple[str, ...] = (),
     base_env: dict[str, str] | None = None,
     dry_run: bool = False,
+    task: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Return (argv, env) for the role subprocess. See CONTRACT.md.
 
     With dry_run=True, the bot token file is not read. GH_TOKEN gets the
     value DRY_RUN_TOKEN, so a dry run works before the bot is set up.
+    A task text goes in the prompt after the spec body, under a "Task:" line.
     """
     runners = config.get("agent_runner")
     table = runners.get(harness) if isinstance(runners, dict) else None
@@ -232,7 +234,8 @@ def build_invocation(
         raise SdlcError(f"{where} has no {cap} flag map. The role {spec.name} needs it.")
     flags = _str_list(table[cap], f"{where} {cap}")
 
-    prompt = "\n".join([spec.body.strip("\n"), "", "Inputs:", *(str(item) for item in inputs)])
+    task_lines = ["Task:", task.strip("\n"), ""] if task else []
+    prompt = "\n".join([spec.body.strip("\n"), "", *task_lines, "Inputs:", *(str(item) for item in inputs)])
     argv = command + flags + [prompt]
 
     source = os.environ if base_env is None else base_env
@@ -273,3 +276,100 @@ def execute(argv: list[str], env: dict[str, str], cwd: Path) -> int:
     except PermissionError:
         raise SdlcError(f"The command {argv[0]} cannot run. Check that it is executable.") from None
     return result.returncode
+
+
+# No-edit check (D20) -------------------------------------------------------------
+#
+# A role without the edit capability must not change the repo. The harness
+# flags cannot always block a write (a shell can write files), so the engine
+# compares the repo state before and after the role. It detects only. It
+# never reverts, because the human decides what to keep.
+
+NO_EDIT_EXIT = 3
+NO_EDIT_EXEMPT = "sdlc/work/"
+EDIT_CAPABILITY = "edit"
+
+
+class NoEditViolation(SdlcError):
+    """A role without the edit capability changed the repo."""
+
+
+def needs_no_edit_check(capabilities: list[str]) -> bool:
+    return EDIT_CAPABILITY not in capabilities
+
+
+def _git_out(repo: Path, *args: str) -> bytes:
+    result = subprocess.run(["git", *args], cwd=repo, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise SdlcError(f"The no-edit check cannot read the repo state: git {args[0]} failed: {detail[-1] if detail else 'no output'}")
+    return result.stdout
+
+
+def _content_hash(path: Path) -> str:
+    import hashlib
+
+    try:
+        if path.is_symlink():
+            return "link:" + os.readlink(path)
+        if path.is_dir():
+            return "dir"
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return "missing"
+
+
+def snapshot(repo: Path) -> dict:
+    """Return the HEAD commit and the status and content hash of each dirty path.
+
+    Ignored files are not in the snapshot.
+    """
+    repo = Path(repo)
+    # A repo with no commit has no HEAD. Then the head part is empty.
+    found = subprocess.run(["git", "rev-parse", "--verify", "--quiet", "HEAD"], cwd=repo, capture_output=True)
+    head = found.stdout.decode("ascii").strip() if found.returncode == 0 else ""
+    out = _git_out(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    paths = {}
+    records = out.split(b"\0")
+    index = 0
+    while index < len(records):
+        record = records[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        if not record:
+            continue
+        status, path = record[:2], record[3:]
+        if status[0] in "RC" and index < len(records):
+            old = records[index].decode("utf-8", errors="surrogateescape")
+            index += 1
+            paths[old] = ("R-", "")
+        paths[path] = (status, _content_hash(repo / path))
+    return {"head": head, "paths": paths}
+
+
+def changed_paths(before: dict, after: dict) -> list[str]:
+    """Return the paths that differ between two snapshots, outside sdlc/work/."""
+    names = set(before["paths"]) | set(after["paths"])
+    changed = sorted(
+        name for name in names
+        if before["paths"].get(name) != after["paths"].get(name) and not name.startswith(NO_EDIT_EXEMPT)
+    )
+    if before["head"] != after["head"]:
+        changed.insert(0, "HEAD (the role made a commit or moved the branch)")
+    return changed
+
+
+def execute_checked(spec: RoleSpec, argv: list[str], env: dict[str, str], cwd: Path) -> int:
+    """Run the role. For a role without edit, raise NoEditViolation when it changed the repo."""
+    if not needs_no_edit_check(spec.capabilities):
+        return execute(argv, env, cwd)
+    before = snapshot(cwd)
+    code = execute(argv, env, cwd)
+    changed = changed_paths(before, snapshot(cwd))
+    if changed:
+        listing = "".join(f"\n  {name}" for name in changed)
+        raise NoEditViolation(
+            f"The role {spec.name} has no edit capability, but it changed the repo outside {NO_EDIT_EXEMPT}. "
+            f"Review or discard these changes. The engine did not undo them.{listing}",
+            code=NO_EDIT_EXIT,
+        )
+    return code

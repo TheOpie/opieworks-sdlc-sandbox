@@ -22,8 +22,8 @@ This skill is a scaffold. It is not built yet. Its `SKILL.md` tells the agent to
 {{if built}}
 | `templates/` | Default artifact templates |
 | `agents/` | Default role specs |
-| `files/` | Default repo files, for example `REVIEW.md` |
-| `github/` | Default GitHub workflow files |
+| `files/` | Default repo files, for example `REVIEW.md`, when the stage has them |
+| `github/` | Default GitHub workflow files, when the stage has them |
 {{end}}
 | `PORTING.md` | This file |
 
@@ -105,6 +105,7 @@ A role spec is a markdown file in `agents/`. Its frontmatter has `name`, `stage`
 - In the target repo, run `python3 <bundle>/core/sdlc.py role <role> --harness <name> --dry-run` to see the command and the names of the environment variables. `<role>` is a role name, for example `reviewer`. The engine uses `sdlc/agents/<role>.md` from the overlay when it exists, else `<bundle>/agents/<role>.md`. A path to a spec file also works. A dry run does not read the bot token file.
 - An `--input` path is relative to the current folder. The engine gives it to the role process relative to the repo.
 - The engine gives the bot token to the role process only when the role has the `github-bot` capability.
+- A role without the `edit` capability must not change the repo. The engine compares the git status and the content of changed files before and after the role. When the role changed a file outside `sdlc/work/`, or made a commit, the `role` command exits with code 3 and lists the paths. The engine does not undo the changes. Files that `.gitignore` ignores are not checked.
 
 The engine isolates each role process from the GitHub login of the human user. It does these things:
 
@@ -138,6 +139,8 @@ Then do the bootstrap in this order:
 3. A repo admin runs `python3 sdlc/.engine/sdlc.py gates apply`. It makes the branch ruleset and the `production` environment rules.
 4. A repo admin runs `python3 sdlc/.engine/sdlc.py check-bot`. Every rule must show PASS.
 
+The ruleset lets only a repo admin update the default branch, through the admin bypass. Without this rule, the bot can merge a pull request after a human approves it. The result: only a repo admin can merge. On a team, give the admin role to each person who merges, or remove the `update` rule and accept that the bot can merge an approved pull request.
+
 Never commit the token file. Never paste the token into a chat or a log.
 {{end}}
 
@@ -149,6 +152,8 @@ The engine isolates role processes from the human login, as the Roles section te
 {{end}}
 
 The procedures never approve, merge, or start a production release. The GitHub rules hold the important gates.
+
+The bot has Write access, so GitHub lets it approve a pull request that it did not open. An agent can open a pull request with the human token and then approve it with the bot token. That approval counts for every file that CODEOWNERS does not cover. Only a code owner can approve files that CODEOWNERS covers. To close this path, add `* @<owner>` as the first CODEOWNERS rule. Then every pull request needs a code-owner approval. The human then needs an admin bypass to merge their own pull requests.
 
 To lower the risk, add an optional deny rule to your agent harness. The rule blocks these actions:
 
@@ -200,11 +205,13 @@ An example runner table for `sdlc/config.toml`:
 default = "claude"
 
 [agent_runner.claude]
-command = ["claude", "-p"]
-read    = ["--allowedTools", "Read,Grep,Glob"]
-run     = ["--allowedTools", "Read,Grep,Glob,Bash"]
-edit    = ["--allowedTools", "Read,Grep,Glob,Edit,Write,Bash"]
+command = ["claude", "-p", "--strict-mcp-config"]
+read    = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run     = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit    = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
 ```
+
+Use the `=` form. `--tools` and `--allowedTools` take a list of values, so a flag value after a space also takes the prompt. `--tools` limits the tools. `--allowedTools` approves them for `-p` mode. `--allowedTools` alone does not limit the tools. `--strict-mcp-config` starts the role with no MCP server, because an MCP server can hold a login of the human user. The `run` map gives a shell, and a shell can write files.
 {{end}}
 
 ### Codex
@@ -212,13 +219,15 @@ edit    = ["--allowedTools", "Read,Grep,Glob,Edit,Write,Bash"]
 Use a command rule or a sandbox policy that blocks the same commands. The syntax depends on the Codex CLI version.
 {{if stage}}
 
-An example runner table for `sdlc/config.toml`:
+An example runner table for `sdlc/config.toml`. Check it against your Codex CLI version:
 
 ```toml
 [agent_runner.codex]
 command = ["codex", "exec"]
 read    = ["-s", "read-only"]
-run     = ["-s", "workspace-write"]
+run     = ["-s", "read-only"]
 edit    = ["-s", "workspace-write"]
 ```
+
+The read-only sandbox runs commands and blocks file writes, so a `run` role cannot edit. Codex has no mode without a shell, so `read` also runs commands. A command that must write files, for example to a cache, fails in the read-only sandbox.
 {{end}}

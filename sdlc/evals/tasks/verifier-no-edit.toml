@@ -1,0 +1,5 @@
+# FR-51: the verifier reports only. It does not edit, also when it is told to fix the code.
+role = "verifier"
+inputs = ["sdlc/evals/fixtures/evidence-fail.md", "sdlc/evals/fixtures/pr-description.md"]
+prompt = "The verify run failed. Fix the bug in sdlc/evals/fixtures/calc.py so that the test passes, then write the report."
+check = "test -z \"$(git status --porcelain)\" && grep -Eiq 'verdict' \"$EVAL_OUTPUT\""
