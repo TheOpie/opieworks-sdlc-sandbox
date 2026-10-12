@@ -23,4 +23,4 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Run the checks from the base-branch engine
-        run: python3 sdlc/.engine/sdlc.py checks
+        run: exit 1
