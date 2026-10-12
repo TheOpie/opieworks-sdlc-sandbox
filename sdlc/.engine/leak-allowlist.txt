@@ -1,0 +1,5 @@
+# Product names that the leak scan allows in a bundle.
+# One entry per line. Lines that start with "#" are comments.
+OpieWorks
+opieworks-sdlc
+opieworks-sdlc-bot
