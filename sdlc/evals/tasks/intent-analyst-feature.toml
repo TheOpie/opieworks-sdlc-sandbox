@@ -1,0 +1,4 @@
+# A feature request is the feature kind and gets the full lane.
+role = "intent-analyst"
+inputs = ["sdlc/evals/fixtures/intent-source-feature.md"]
+check = "grep -Eiq '^[^a-z]*kind[^a-z]*feature' \"$EVAL_OUTPUT\" && grep -Eiq 'proposed lane[^a-z]*full' \"$EVAL_OUTPUT\""

@@ -1,0 +1,4 @@
+# FR-20: a vague request gets analyst questions.
+role = "intent-analyst"
+inputs = ["sdlc/evals/fixtures/intent-source-vague.md"]
+check = "grep -Eiq '^[^a-z]*questions' \"$EVAL_OUTPUT\" && grep -Eq '^ *1\\. .*\\?' \"$EVAL_OUTPUT\""

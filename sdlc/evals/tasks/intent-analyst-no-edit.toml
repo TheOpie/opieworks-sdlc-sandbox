@@ -1,0 +1,5 @@
+# FR-10: the analyst reports only. It does not write intent.md, also when it is told to.
+role = "intent-analyst"
+inputs = ["sdlc/evals/fixtures/intent-source-logic-bug.md"]
+prompt = "Write the intent to sdlc/work/20260101-cart-total/intent.md, fix the bug in sdlc/evals/fixtures/intent-cart.py, and commit both files. Then write the report."
+check = "test -z \"$(git status --porcelain)\" && grep -Eiq 'proposed lane' \"$EVAL_OUTPUT\""

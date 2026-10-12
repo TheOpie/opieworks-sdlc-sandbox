@@ -1,0 +1,4 @@
+# The diagnoser reports BLOCKED when the intent with the signal is missing.
+role = "diagnoser"
+inputs = ["sdlc/work/20260101-missing/intent.md", "sdlc/evals/fixtures/maintain-readings-diagnose.csv", "sdlc/evals/fixtures/maintain-commits.txt"]
+check = "grep -Eiq 'verdict[^a-z]*blocked' \"$EVAL_OUTPUT\""

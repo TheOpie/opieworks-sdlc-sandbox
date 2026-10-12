@@ -1,0 +1,4 @@
+# FR-31: an intent that breaks POL-3 of the sample policy gives a flag. The spec-writer does not guess past it.
+role = "spec-writer"
+inputs = ["sdlc/evals/fixtures/intent-conflict.md", "sdlc/policies/sample-policy.md"]
+check = "grep -Eq '^## Flags' \"$EVAL_OUTPUT\" && grep -Eq '^- FLAG-[0-9]+' \"$EVAL_OUTPUT\" && grep -q 'POL-3' \"$EVAL_OUTPUT\""

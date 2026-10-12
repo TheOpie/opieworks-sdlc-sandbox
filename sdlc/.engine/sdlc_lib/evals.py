@@ -15,6 +15,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -30,12 +31,14 @@ TASKS_REL = "sdlc/evals/tasks"
 RESULT_REL = "sdlc/evals/results/latest.json"
 RESULT_FORMAT = 1
 # The eval-gate watches AGENTS.md files and the sdlc/ folder. Work item
-# artifacts and the eval results are not agent instructions, so they are
-# not watched. A change to them alone does not need new evals, and the
+# artifacts, triage records, lessons, and the eval results are not agent
+# instructions, so they are not watched. A change to them alone does not need new evals, and the
 # result file cannot change its own hash.
 WATCHED_NAME = "AGENTS.md"
 WATCHED_PREFIX = "sdlc/"
-WATCH_EXCLUDE = ("sdlc/work/", "sdlc/evals/results/")
+WATCH_EXCLUDE = ("sdlc/work/", "sdlc/triage/", "sdlc/lessons/", "sdlc/evals/results/")
+# The begin marker of a stage section in AGENTS.md. installed_stages reads it.
+_AGENTS_BEGIN = re.compile(r"<!-- opieworks-sdlc:([a-z0-9][a-z0-9-]*):begin -->")
 TASK_KEYS = {"role", "check", "prompt", "inputs", "setup"}
 OUTPUT_ENV = "EVAL_OUTPUT"
 ROLE_EXIT_ENV = "EVAL_ROLE_EXIT"
@@ -305,6 +308,56 @@ def _dirty_watched(repo: Path) -> list[str]:
     return paths
 
 
+def installed_stages(repo: Path) -> list[str]:
+    """Return the IDs of the stages that have a section in AGENTS.md, in file order."""
+    path = Path(repo) / "AGENTS.md"
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    found = []
+    for match in _AGENTS_BEGIN.finditer(text):
+        stage = match.group(1)
+        if stage not in found and common.get_section(text, stage, "md") is not None:
+            found.append(stage)
+    return found
+
+
+def _stage_dirs(stage_dir: Path, repo: Path) -> list[Path]:
+    """Return stage_dir, then each other installed stage folder next to it."""
+    stage_dir = Path(stage_dir)
+    installed = set(installed_stages(repo))
+    dirs = [stage_dir]
+    parent = stage_dir.absolute().parent
+    for folder in sorted(parent.iterdir()) if parent.is_dir() else []:
+        if folder.name == stage_dir.name or not (folder / "stage.toml").is_file():
+            continue
+        try:
+            stage_id = common.load_stage(folder)["id"]
+        except SdlcError:
+            continue
+        if stage_id in installed:
+            dirs.append(folder)
+    return dirs
+
+
+def resolve_role(name: str, stage_dir: Path, repo: Path) -> Path:
+    """Return the role spec of an eval task.
+
+    The order is the overlay, the given stage folder, then each installed
+    stage folder next to it. A stage is installed when AGENTS.md has its
+    section. So a task that another stage installed finds its role.
+    """
+    rel = f"agents/{name}.md"
+    dirs = _stage_dirs(stage_dir, repo)
+    for folder in dirs:
+        try:
+            return overlay.resolve(rel, folder, repo)
+        except SdlcError:
+            continue
+    raise SdlcError(f"No overlay file and no installed stage has the role {name!r}. "
+                    f"Tried: {', '.join(d.name for d in dirs)}.")
+
+
 def _run_task(task: Task, repo: Path, stage_dir: Path, harness: str, head: str) -> dict:
     tmp = Path(tempfile.mkdtemp(prefix="opieworks-sdlc-eval-"))
     worktree = tmp / "worktree"
@@ -321,7 +374,7 @@ def _run_task(task: Task, repo: Path, stage_dir: Path, harness: str, head: str) 
                 record["setup_log"] += f"\nThe setup command stopped with exit code {code}.\n"
                 return record
         config = common.load_config(worktree)
-        spec = role.parse_role_spec(overlay.resolve(f"agents/{task.role}.md", stage_dir, worktree))
+        spec = role.parse_role_spec(resolve_role(task.role, stage_dir, worktree))
         argv, env = role.build_invocation(spec, harness, config, inputs=task.inputs, task=task.prompt or None)
         try:
             proc = subprocess.run(argv, env=env, cwd=worktree, stdin=subprocess.DEVNULL,

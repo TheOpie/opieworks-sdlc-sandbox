@@ -4,3 +4,42 @@ sdlc/.engine/ @TheOpie
 sdlc/agents/ @TheOpie
 sdlc/config.toml @TheOpie
 # opieworks-sdlc:testing:end
+
+# opieworks-sdlc:intent:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+# opieworks-sdlc:intent:end
+
+# opieworks-sdlc:design:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+sdlc/policies/ @TheOpie
+# opieworks-sdlc:design:end
+
+# opieworks-sdlc:build:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+# opieworks-sdlc:build:end
+
+# opieworks-sdlc:deploy:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+/REVIEW.md @TheOpie
+sdlc/runbooks/ @TheOpie
+# opieworks-sdlc:deploy:end
+
+# opieworks-sdlc:maintain:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+sdlc/bands.toml @TheOpie
+# opieworks-sdlc:maintain:end

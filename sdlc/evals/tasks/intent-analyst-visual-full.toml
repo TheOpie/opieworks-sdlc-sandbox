@@ -1,0 +1,4 @@
+# FR-11: a bug with a visual change gets the full lane.
+role = "intent-analyst"
+inputs = ["sdlc/evals/fixtures/intent-source-visual-bug.md"]
+check = "grep -Eiq 'visual change[^a-z]*yes' \"$EVAL_OUTPUT\" && grep -Eiq 'proposed lane[^a-z]*full' \"$EVAL_OUTPUT\""

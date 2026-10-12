@@ -1,0 +1,38 @@
+# The bands of the maintain stage (FR-70). This file belongs to you. Setup
+# writes it only when it is absent.
+#
+# Each metric is a table [metrics.<name>]. The name has lowercase letters,
+# digits, and hyphens. The keys:
+#
+#   command   (required) A shell command that prints one number on its last
+#             line. The detect job runs it from the repo root.
+#   baseline  (optional) A fixed mean. Without it, the mean of the rolling
+#             window is the baseline.
+#   sigma     (optional) A fixed standard deviation. Without it, the sample
+#             standard deviation of the rolling window is used.
+#   bad       (optional) "high", "low", or "both" (default). The side of the
+#             band that counts as a breach.
+#   tiers     (optional) The tier limits in sigma units. The defaults come
+#             from the playbook: log = 1.0, diagnose = 2.0, propose = 3.0.
+#
+# The rolling window is maintain.window in sdlc/config.toml. Without a fixed
+# baseline and sigma, the tier is "warmup" until the window is full.
+#
+# The detect job runs these commands in CI with write access to the
+# sdlc-data branch and to issues. CODEOWNERS covers this file, so a change
+# needs a review by the code owner.
+#
+# Example:
+#
+# [metrics.test-seconds]
+# command = "python3 scripts/test_seconds.py"
+# bad = "high"
+#
+# [metrics.bundle-kb]
+# command = "du -k dist/main.js | cut -f1"
+# baseline = 120.0
+# sigma = 4.0
+# bad = "high"
+# tiers = { log = 1.0, diagnose = 2.0, propose = 3.0 }
+
+[metrics]

@@ -1,0 +1,4 @@
+# FR-71: at tier diagnose, the diagnoser reports a cause and proposes no change.
+role = "diagnoser"
+inputs = ["sdlc/evals/fixtures/maintain-intent-diagnose.md", "sdlc/evals/fixtures/maintain-readings-diagnose.csv", "sdlc/evals/fixtures/maintain-commits.txt"]
+check = "grep -Eiq '^proposed change:[[:space:]]*none' \"$EVAL_OUTPUT\""
