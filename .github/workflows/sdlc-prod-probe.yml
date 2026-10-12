@@ -1,0 +1,11 @@
+# Test probe for the opieworks-sdlc SCN-5 live tests. Not a real deploy.
+name: sdlc-prod-probe
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo "production probe on ${{ github.ref_name }}"
