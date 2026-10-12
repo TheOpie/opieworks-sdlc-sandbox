@@ -293,7 +293,7 @@ def cmd_role(args):
             print("argv: " + " ".join(shlex.quote(a) for a in argv))
             print("env keys: " + " ".join(sorted(env)))
             return 0
-        return role.execute(argv, env, repo)
+        return role.execute_checked(spec, argv, env, repo)
     finally:
         role.cleanup(env)
 

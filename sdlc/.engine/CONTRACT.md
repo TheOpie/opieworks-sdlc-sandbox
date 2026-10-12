@@ -195,6 +195,7 @@ def cleanup(env: dict[str, str]) -> None
   5. Only when `github-bot` is in the capabilities: set `env["GH_TOKEN"]` to `read_bot_token(config["bot"]["token_file"])`. With `dry_run=True`, do not read the file. Set `env["GH_TOKEN"]` to `DRY_RUN_TOKEN`.
   6. Set `env["GH_CONFIG_DIR"]` to a new empty temp folder, so `gh` cannot find the stored human login. The caller removes it with `cleanup(env)`.
 - `execute` runs `subprocess.run(argv, env=env, cwd=cwd)` and returns the exit code. A missing command raises `SdlcError`.
+- No-edit check (D20). `execute_checked(spec, argv, env, cwd) -> int` runs `execute`. When `edit` is not in the capabilities (`needs_no_edit_check`), it takes `snapshot(cwd)` before and after the role: the HEAD commit, and for each path in `git status --porcelain=v1 -z --untracked-files=all` its status and a SHA-256 of its content. So a further edit to a file that was already dirty is found. `changed_paths(before, after)` lists every path whose status or content changed, and HEAD when it moved, except paths under `sdlc/work/`. When the list is not empty, it raises `NoEditViolation` (an `SdlcError`) with the exit code `NO_EDIT_EXIT` (3). The message names the role, says "Review or discard these changes. The engine did not undo them.", and lists one path per line. The check detects only. It never reverts. It runs for every harness and needs no harness flag. Files that `.gitignore` ignores are out of scope. A role with `edit` is not checked. A dry run does not run the role and does not check.
 
 ## 10. scan
 
@@ -240,7 +241,7 @@ def export(skill_dir: Path, out: Path, require_denylist: bool = True) -> Path
 | `eject <relpath> [--stage-dir] [--repo]` | `overlay.eject` |
 | `work new <title> --lane fast\|full [--repo]` | `workitem.new_item` |
 | `work show <id> [--repo]` | `workitem.show_item` |
-| `role <name-or-path> --harness <h> [--stage-dir] [--input FILE ...] [--task TEXT] [--repo] [--dry-run]` | `overlay.resolve("agents/<name>.md")` for a name, `role.parse_role_spec`, `common.load_config`, `role.build_invocation`, `role.execute`, `role.cleanup`. A value with a `/` or a `.md` suffix is a path |
+| `role <name-or-path> --harness <h> [--stage-dir] [--input FILE ...] [--task TEXT] [--repo] [--dry-run]` | `overlay.resolve("agents/<name>.md")` for a name, `role.parse_role_spec`, `common.load_config`, `role.build_invocation`, `role.execute_checked`, `role.cleanup`. Exit 3 on a no-edit violation. A value with a `/` or a `.md` suffix is a path |
 | `leak-scan <dir>` | `scan.leak_scan`. Exit 1 on any hit. A notice on stderr when the denylist is missing or empty |
 | `lint-portable <dir>` | `scan.lint_portable`. Exit 1 on any hit |
 | `export <skill-dir> --out <dir> [--no-denylist]` | `export.export` |
