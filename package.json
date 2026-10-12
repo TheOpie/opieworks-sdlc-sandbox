@@ -1,0 +1,21 @@
+{
+  "name": "opieworks-sdlc-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test sandbox for opieworks-sdlc gate checks. Not a real project. Do not use.",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "happy-dom": "20.0.11",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

@@ -1,0 +1,7 @@
+# opieworks-sdlc config for the sandbox. This file belongs to the repo owner.
+
+[bot]
+login = "opieworks-sdlc-bot"
+
+[codeowners]
+owner = "TheOpie"
