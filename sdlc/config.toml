@@ -5,3 +5,25 @@ login = "opieworks-sdlc-bot"
 
 [codeowners]
 owner = "TheOpie"
+
+# Testing stage (S1). C3: max_runs is a proposed number. Confirm it after S1.
+[testing]
+verify = "pnpm verify"
+max_runs = 5
+
+[agent_runner]
+default = "claude"
+
+# C4: flags checked in S1 on Claude Code 2.1.296.
+[agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+# Not checked in S1: the Codex CLI did not start on the build machine.
+[agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "workspace-write"]
+edit = ["-s", "workspace-write"]
