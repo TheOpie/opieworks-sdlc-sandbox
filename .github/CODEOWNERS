@@ -1,0 +1,6 @@
+# opieworks-sdlc:testing:begin
+.github/ @TheOpie
+sdlc/.engine/ @TheOpie
+sdlc/agents/ @TheOpie
+sdlc/config.toml @TheOpie
+# opieworks-sdlc:testing:end

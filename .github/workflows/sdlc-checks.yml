@@ -1,0 +1,26 @@
+# Managed by opieworks-sdlc. Setup rewrites this file. Do not edit it.
+#
+# FR-93: this job runs from the base branch through pull_request_target.
+# It never checks out or runs code from the PR head, so a PR that edits
+# this file or the engine cannot change its own result.
+name: sdlc-checks
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  sdlc-checks:
+    name: sdlc-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Run the checks from the base-branch engine
+        run: python3 sdlc/.engine/sdlc.py checks
