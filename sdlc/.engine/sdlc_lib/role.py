@@ -211,11 +211,13 @@ def build_invocation(
     inputs: list[str] | tuple[str, ...] = (),
     base_env: dict[str, str] | None = None,
     dry_run: bool = False,
+    task: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Return (argv, env) for the role subprocess. See CONTRACT.md.
 
     With dry_run=True, the bot token file is not read. GH_TOKEN gets the
     value DRY_RUN_TOKEN, so a dry run works before the bot is set up.
+    A task text goes in the prompt after the spec body, under a "Task:" line.
     """
     runners = config.get("agent_runner")
     table = runners.get(harness) if isinstance(runners, dict) else None
@@ -232,7 +234,8 @@ def build_invocation(
         raise SdlcError(f"{where} has no {cap} flag map. The role {spec.name} needs it.")
     flags = _str_list(table[cap], f"{where} {cap}")
 
-    prompt = "\n".join([spec.body.strip("\n"), "", "Inputs:", *(str(item) for item in inputs)])
+    task_lines = ["Task:", task.strip("\n"), ""] if task else []
+    prompt = "\n".join([spec.body.strip("\n"), "", *task_lines, "Inputs:", *(str(item) for item in inputs)])
     argv = command + flags + [prompt]
 
     source = os.environ if base_env is None else base_env

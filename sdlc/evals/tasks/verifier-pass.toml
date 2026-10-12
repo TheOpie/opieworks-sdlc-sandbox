@@ -1,0 +1,4 @@
+# The verifier reports PASS when the last run passed.
+role = "verifier"
+inputs = ["sdlc/evals/fixtures/evidence-pass.md", "sdlc/evals/fixtures/pr-description.md"]
+check = "grep -Eiq 'verdict[^a-z]*pass' \"$EVAL_OUTPUT\""

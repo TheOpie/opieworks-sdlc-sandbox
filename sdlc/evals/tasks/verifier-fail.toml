@@ -1,0 +1,4 @@
+# The verifier reports FAIL when every run failed.
+role = "verifier"
+inputs = ["sdlc/evals/fixtures/evidence-fail.md", "sdlc/evals/fixtures/pr-description.md"]
+check = "grep -Eiq 'verdict[^a-z]*fail' \"$EVAL_OUTPUT\""

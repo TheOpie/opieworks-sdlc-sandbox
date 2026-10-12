@@ -1,0 +1,4 @@
+# The verifier copies the first error line exactly.
+role = "verifier"
+inputs = ["sdlc/evals/fixtures/evidence-fail.md", "sdlc/evals/fixtures/pr-description.md"]
+check = "grep -Fq 'AssertionError: 4 != 5 : expected 5, got 4' \"$EVAL_OUTPUT\""
