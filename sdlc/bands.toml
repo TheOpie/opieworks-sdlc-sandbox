@@ -36,3 +36,9 @@
 # tiers = { log = 1.0, diagnose = 2.0, propose = 3.0 }
 
 [metrics]
+
+[metrics.source-lines]
+command = "cat src/*.ts | wc -l"
+baseline = 115.0
+sigma = 20.0
+bad = "high"

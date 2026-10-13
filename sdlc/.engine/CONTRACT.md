@@ -25,6 +25,7 @@ This file is the interface for the engine modules. Each module author follows it
 | Overlay folders | `sdlc/templates/`, `sdlc/agents/` (`common.OVERLAY_PREFIXES`) |
 | Repo config | `sdlc/config.toml` (`common.CONFIG_REL`) |
 | Engine copy | `sdlc/.engine/` (`common.ENGINE_REL`) |
+| Installed stage defaults | `sdlc/.engine/defaults.toml` (`common.DEFAULTS_REL`) |
 | Work items | `sdlc/work/<id>/` (`common.WORK_REL`) |
 | Bot token file default | `~/.config/opieworks-sdlc/bot.env` (`common.DEFAULT_BOT_TOKEN_FILE`) |
 | Leak denylist default | `~/.config/opieworks-sdlc/leak-denylist.txt` (`common.DEFAULT_LEAK_DENYLIST`) |
@@ -85,7 +86,8 @@ Each marker is a full line that starts at column 0. Trailing spaces are allowed.
 | `write_if_changed(path, data: str \| bytes) -> bool` | True when it wrote. Makes parent folders. No newline translation | `OSError` |
 | `load_toml(path) -> dict` | parsed TOML | `SdlcError` when missing or not valid |
 | `deep_merge(base: dict, over: dict) -> dict` | a new dict. Tables merge. Other values replace | |
-| `load_config(repo, defaults: dict \| None = None) -> dict` | `CORE_DEFAULTS`, then `defaults`, then `sdlc/config.toml` | `SdlcError` on bad TOML |
+| `installed_defaults(repo) -> dict` | the tables of `sdlc/.engine/defaults.toml` as `{stage id: config_defaults}`. A missing file gives `{}` | `SdlcError` on bad TOML or a stage value that is not a table |
+| `load_config(repo, defaults: dict \| None = None) -> dict` | `CORE_DEFAULTS`, then each table of `installed_defaults(repo)` in stage id order, then `defaults`, then `sdlc/config.toml`. See section 7a | `SdlcError` on bad TOML |
 | `flatten_keys(data: dict, prefix="") -> list[str]` | sorted dotted names of all leaf values. An empty table is a leaf | |
 | `dump_toml(data: dict) -> str` | TOML text. `tomllib.loads(dump_toml(d)) == d` | `SdlcError` on unsupported values (None, arrays of tables) |
 | `load_stage(stage_dir) -> dict` | see section 3 | `SdlcError` on any bad field, a section of the wrong type, or an unsafe path |
@@ -128,10 +130,27 @@ Steps, in this order:
 4. Never write under `sdlc/templates/` or `sdlc/agents/` (the overlay).
 5. `AGENTS.md`: `set_section(text, stage.id, stage.agents_md, "md")` when `agents_md` is set. Make the file when absent. When `AGENTS.md` is a symlink, for example to `CLAUDE.md`, write the link target. The target must be in the repo, outside `.git`, and not a reserved path. Else raise `SdlcError`. The symlink stays as it is.
 6. `.github/CODEOWNERS`: `set_section` with style `"hash"`. The body is one line per path: `<path> @<owner>`. The owner comes from config key `codeowners.owner`. When the key is absent, write the path lines with the placeholder owner `@OWNER` and add `codeowners.owner` to `new_config_keys`. When the repo already uses a root `CODEOWNERS` or `docs/CODEOWNERS`, the section goes in that file, and the body gets one more line that gives that file to the owner, for example `/CODEOWNERS @<owner>`.
-7. Engine copy: make `sdlc/.engine/` match the core folder (the folder that holds `sdlc.py`) exactly, with `iter_files` and `EXCLUDED_DIRS`. Delete files in `sdlc/.engine/` that the core does not have and list them in `removed`. The names compare by exact case. The delete pass runs before the copy pass, so a case-insensitive disk cannot lose a file that only changed case. `VERSION` is part of the copy.
+7. Engine copy: make `sdlc/.engine/` match the core folder (the folder that holds `sdlc.py`) exactly, with `iter_files` and `EXCLUDED_DIRS`. Delete files in `sdlc/.engine/` that the core does not have and list them in `removed`. The one exception is `defaults.toml`. The sync keeps it. The names compare by exact case. The delete pass runs before the copy pass, so a case-insensitive disk cannot lose a file that only changed case. `VERSION` is part of the copy.
 8. `sdlc/config.toml`: when absent, write `dump_toml(stage.config_defaults)` and set `config_created`. When present, never change it. Report the keys of `flatten_keys(config_defaults)` that `flatten_keys(existing)` lacks.
+8a. `sdlc/.engine/defaults.toml` (managed): set the table `[<stage id>]` to `stage.config_defaults`. Keep the tables of the other stages. Write a fixed header comment, then the tables sorted by stage id, with `write_if_changed`. Add the path to `written` when it changes. Section 7a tells why.
 9. A second call with no changes writes nothing and returns an empty `written` and `removed`.
 10. All checks run before the first write. Every destination goes through `safe_write_path`. Setup refuses `sdlc/.engine/` when it, a parent, or anything inside it is a symlink. The `config.toml` text is made before the first write.
+
+## 7a. Stage defaults at run time
+
+A stage command reads a config key from `sdlc/config.toml` first. When the key is absent there, it uses the `config_defaults` of the installed stages. The repo value always wins. `common.load_config` is the one helper for this. Every command reads its config through it.
+
+Setup never edits an existing `sdlc/config.toml`. So a stage that a repo installs after the file exists gets no keys in it. Thus setup records the defaults of each stage in `sdlc/.engine/defaults.toml`, and `load_config` reads them from there.
+
+Why a file in the repo, and not the stage folder:
+
+- The engine copy in `sdlc/.engine/` has no stage folder. The CI jobs (`checks`, `detect`, `deploy build-docs`) run from it. A file in the repo works for the engine copy and for a skill command in the same way. So local runs and CI runs read the same values.
+- The file holds only the stages that the repo installed. The stage folders next to a skill can hold stages that the repo did not install.
+- `sdlc/.engine/` is already managed and owned by the gate owner in CODEOWNERS. So the file needs no new CODEOWNERS path.
+
+The file is managed, not user-owned. Do not edit it. Setup rewrites the table of its stage every time. Put a team value in `sdlc/config.toml`. When two stages give the same key, the stage with the later id wins. The stages now give the same `agent_runner` tables.
+
+A repo that ran setup before engine 0.5.1 has no `defaults.toml`. Run setup again for each installed stage. Until then, a missing key gives the same error as before, for example `The config has no deploy.nit_cap.`.
 
 ## 8. workitem
 
@@ -541,3 +560,35 @@ CLI (one block in `sdlc.py`, marked "Stage: maintain"):
 | `close-check <id> [--repo]` | `close_check`. Exit 1 on any problem |
 
 The workflow `sdlc-detect.yml` runs only on `workflow_dispatch` (D24, no schedule) with `contents: write` and `issues: write`. It fetches `sdlc-data` when the branch exists, runs `python3 sdlc/.engine/sdlc.py detect --issues`, and pushes `sdlc-data`. It has no model step (D15).
+
+## Stage: hub (S7)
+
+Module `sdlc_lib/hub.py` (FR-80 to FR-84). The hub reads only. It makes `GET` calls with the login of the person who runs it (`github.api` with no env), and git reads with `git show` and `git ls-tree`. It never writes a file, pushes, comments, or uses the bot token. No stage imports it (FR-83).
+
+```python
+STAGES = ("intent", "design", "build", "testing", "deploy", "maintain")
+STALE_DAYS = 50
+def find_stages(hub_dir, bundles=None) -> dict[str, Path]
+def snapshot(repo, api=None, ref=None, now=None) -> Snapshot
+def item_ids(snap) -> list[str]
+def item_state(item, snap) -> ItemState
+def find_item(item, snap) -> ItemState
+def status(snap) -> dict
+def render_status(data) -> list[str]
+def next_step(state, stages) -> dict
+def render_next(data) -> list[str]
+```
+
+- `find_stages`: the given bundle folders first, then `opieworks-sdlc-<stage>` next to `hub_dir`. A folder counts when `common.load_stage` loads its `stage.toml` and the ID is one of `STAGES`. The first folder for an ID wins.
+- `snapshot`: the default branch comes from `repos/<slug>`. The ref is `--ref`, else `origin/<default>`, else `<default>`. It reads on that ref: `sdlc/config.toml` (`codeowners.owner`), the AGENTS.md sections (installed stages), every file in `sdlc/work/<id>/`, `sdlc/triage/<id>.md`, `sdlc/lessons/<id>.md`, and `intent.read_triage`. It reads from GitHub: every PR (`state=all`), every branch, the open issues with the label `sdlc:maintain`, and the runs of `sdlc-deploy-production.yml` (a 404 gives no runs). `maintain.last_run` gives the last detect run.
+- Work item IDs come from work folders, triage and lesson files, the head branch `sdlc/<id>/<part>` of a PR or a branch, and the `(<id>)` suffix of a production run name. Never from the PR author. The branch parts are `intent`, `triage`, `design`, `plan`, `build`, `testing`, `deploy`, `maintain`.
+- `item_state` checks from the last stage to the first, and the first match wins: a lesson (done), an open `maintain` PR, a `dismiss` triage entry, production runs (waiting, running, success, failure), a merged code PR (`build`, `testing`, or `deploy` part), an open code PR (`evidence.md` and `review.md` at the PR head through the contents API, the latest review of each user), a plan PR or `plan.md` on the ref (a fast-lane breach routes to design), a design PR (open flags of `spec.md` at the head through `design.parse_flags`) or `spec.md` on the ref, the intent gate (`intent.intent_states`), else "no intent yet". A fast-lane item after an accepted intent goes to build, a full-lane item goes to design (FR-11, FR-33). With no lane, the gate owner sets it.
+- `ItemState` fields: `item`, `stage`, `lane`, `gate`, `pr`, `waiting_on` (`@<codeowners.owner>`, or a line that names the config key), `action`, `next_stage`, `next_step`, `command`. `command` and `action` hold `{skill}` for the stage folder. `next_step` replaces it with the folder from `find_stages`, else with `<opieworks-sdlc-<stage> folder>`.
+- `status` warnings: the ref sha differs from the GitHub branch head. The last detect run is more than `STALE_DAYS` days old. No detect run while AGENTS.md has the maintain section (FR-84).
+
+CLI (one block in `sdlc.py`, marked "Stage: hub"):
+
+| Command | Calls |
+|---|---|
+| `status [--ref REF] [--json] [--repo]` | `snapshot`, `status`, `render_status` |
+| `next <id> [--ref REF] [--json] [--bundle DIR ...] [--stage-dir DIR] [--repo]` | `snapshot`, `find_item`, `find_stages`, `next_step`, `render_next`. Exit 1 for an unknown work item |

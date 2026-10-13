@@ -75,6 +75,7 @@ def setup(stage_dir: Path, repo: Path, open_pr: bool = False) -> SetupReport:
     existing_config = common.load_toml(config_path) if config_path.is_file() else None
     # dump_toml can fail on some TOML values, so make the text before any write.
     config_text = common.dump_toml(stage["config_defaults"]) if existing_config is None else None
+    defaults_text = _defaults_text(repo, stage)
     engine_root = _check_engine(repo)
     agents_text = None
     if stage["agents_md"] is not None:
@@ -112,6 +113,8 @@ def setup(stage_dir: Path, repo: Path, open_pr: bool = False) -> SetupReport:
     written, removed = _sync_engine(engine_root)
     report.written.extend(written)
     report.removed.extend(removed)
+    if common.write_if_changed(common.safe_join(repo, common.DEFAULTS_REL), defaults_text):
+        report.written.append(common.DEFAULTS_REL)
 
     defaults = stage["config_defaults"]
     if existing_config is None:
@@ -237,6 +240,24 @@ def _check_codeowners_path(path: str) -> str:
     return path
 
 
+DEFAULTS_HEADER = (
+    "# Managed by opieworks-sdlc setup. Do not edit. Setup rewrites the table of\n"
+    "# each stage that it installs. Put your values in sdlc/config.toml. They win.\n\n"
+)
+
+
+def _defaults_text(repo: Path, stage: dict) -> str:
+    """Return the new sdlc/.engine/defaults.toml text with the stage table set.
+
+    The tables of other stages stay. The stage tables are sorted by id, so
+    the text is stable and a second setup writes nothing (NFR-3).
+    """
+    common.safe_write_path(repo, common.DEFAULTS_REL)
+    recorded = common.installed_defaults(repo)
+    recorded[stage["id"]] = stage["config_defaults"]
+    return DEFAULTS_HEADER + common.dump_toml({key: recorded[key] for key in sorted(recorded)})
+
+
 def _check_engine(repo: Path) -> Path:
     """Check sdlc/.engine/ before any write. Return its path.
 
@@ -265,7 +286,8 @@ def _sync_engine(dest_root: Path) -> tuple[list[str], list[str]]:
     """
     written, removed = [], []
     wanted = common.iter_files(CORE_DIR)
-    wanted_set = {p.as_posix() for p in wanted}
+    # The defaults file is not a core file. Setup writes it after the sync.
+    wanted_set = {p.as_posix() for p in wanted} | {common.DEFAULTS_NAME}
     if dest_root.is_dir():
         for rel in common.iter_files(dest_root, followlinks=False):
             if rel.as_posix() not in wanted_set:

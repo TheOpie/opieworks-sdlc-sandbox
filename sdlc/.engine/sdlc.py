@@ -845,6 +845,71 @@ def _add_maintain_commands(sub):
 # End of stage: maintain. ------------------------------------------------------
 
 
+# Stage: hub (S7). status and next. Read only. ---------------------------------
+
+
+def _hub_snapshot(args):
+    from sdlc_lib import hub
+
+    return hub.snapshot(_repo(args), ref=args.ref)
+
+
+def cmd_status(args):
+    import json
+
+    from sdlc_lib import hub
+
+    data = hub.status(_hub_snapshot(args))
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+    else:
+        for line in hub.render_status(data):
+            print(line)
+    return 0
+
+
+def cmd_next(args):
+    import json
+
+    from sdlc_lib import hub
+    from sdlc_lib.common import SdlcError
+
+    try:
+        here = _stage_dir(args)
+    except SdlcError:
+        here = None
+    stages = hub.find_stages(here, [Path(b) for b in args.bundle or []])
+    data = hub.next_step(hub.find_item(args.item_id, _hub_snapshot(args)), stages)
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+    else:
+        for line in hub.render_next(data):
+            print(line)
+    return 0
+
+
+def _add_hub_commands(sub):
+    """The hub commands (slice S7)."""
+    ref_help = "Git ref with the default branch artifacts. Default: origin/<default branch>."
+    p = sub.add_parser("status", help="Show the stage, lane, and gate state of each work item. Read only.")
+    p.add_argument("--ref", help=ref_help)
+    p.add_argument("--json", action="store_true", help="Print JSON.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("next", help="Show the next stage of a work item and the exact command. Read only.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("--ref", help=ref_help)
+    p.add_argument("--json", action="store_true", help="Print JSON.")
+    p.add_argument("--bundle", action="append", help="A stage bundle folder. Repeat for each bundle.")
+    p.add_argument("--stage-dir", help="The skill folder next to the stage folders. Default: the skill of this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_next)
+
+
+# End of stage: hub. ------------------------------------------------------------
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="sdlc.py", description="opieworks-sdlc engine."
@@ -1014,6 +1079,7 @@ def build_parser():
 
     _add_deploy_parsers(sub)  # Stage: deploy (S5)
     _add_maintain_commands(sub)  # Stage: maintain (S6).
+    _add_hub_commands(sub)  # Stage: hub (S7).
 
     return parser
 
