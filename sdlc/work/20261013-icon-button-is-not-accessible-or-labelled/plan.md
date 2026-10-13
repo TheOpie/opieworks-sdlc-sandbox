@@ -5,7 +5,7 @@ upstream:
   - "spec.md"
 stage: build
 lane: full
-status: draft
+status: accepted
 breach: none
 breach_reason: ""
 locked_tests: [src/components.test.ts]
@@ -45,7 +45,7 @@ Open questions: none
 
 ## Acceptance
 
-PENDING: the acceptance record goes here.
+Accepted by the merge of https://github.com/TheOpie/opieworks-sdlc-sandbox/pull/14.
 
 ## Drift log
 

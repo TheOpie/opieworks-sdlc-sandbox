@@ -32,6 +32,15 @@ describe("createIconButton", () => {
     button.dispatchEvent(new Event("click"));
     expect(onClick).toHaveBeenCalledOnce();
   });
+
+  it("is a labelled native button", () => {
+    const button = createIconButton({ iconPath: "M0 0", label: "Close" });
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.type).toBe("button");
+    expect(button.getAttribute("aria-label")).toBe("Close");
+    expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(button.className).toBe("icon-button");
+  });
 });
 
 describe("createBadge", () => {
