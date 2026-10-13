@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "metrics": {
+    "source-lines": {
+      "command": "cat src/*.ts | wc -l",
+      "tier": "ok",
+      "value": "115",
+      "z": "0"
+    }
+  },
+  "time": "2026-10-13T16:36:44Z",
+  "window": 30
+}
