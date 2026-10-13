@@ -19,6 +19,10 @@ OVERLAY_DIR = "sdlc"
 OVERLAY_PREFIXES = ("sdlc/templates", "sdlc/agents")
 CONFIG_REL = "sdlc/config.toml"
 ENGINE_REL = "sdlc/.engine"
+# Setup records the config_defaults of each installed stage here. It is
+# managed: setup rewrites the table of its stage. It is not a copy of a core file.
+DEFAULTS_REL = "sdlc/.engine/defaults.toml"
+DEFAULTS_NAME = "defaults.toml"
 WORK_REL = "sdlc/work"
 
 DEFAULT_BOT_TOKEN_FILE = "~/.config/opieworks-sdlc/bot.env"
@@ -175,13 +179,34 @@ def deep_merge(base: dict, over: dict) -> dict:
     return result
 
 
+def installed_defaults(repo: str | os.PathLike) -> dict:
+    """Return the tables of sdlc/.engine/defaults.toml: {stage id: config_defaults}.
+
+    A missing file gives {}. Raise SdlcError when a stage value is not a table.
+    """
+    path = Path(repo) / DEFAULTS_REL
+    if not path.is_file():
+        return {}
+    data = load_toml(path)
+    for stage_id, table in data.items():
+        if not isinstance(table, dict):
+            raise SdlcError(f"{DEFAULTS_REL} needs a table for the stage {stage_id}. Run setup again.")
+    return data
+
+
 def load_config(repo: str | os.PathLike, defaults: dict | None = None) -> dict:
     """Return the effective config for a repo.
 
-    Order, lowest first: CORE_DEFAULTS, then defaults (normally the stage
-    [config_defaults] table), then sdlc/config.toml when it exists.
+    Order, lowest first: CORE_DEFAULTS, then the config_defaults of each
+    installed stage in sdlc/.engine/defaults.toml (sorted by stage id), then
+    defaults (normally the stage [config_defaults] table), then
+    sdlc/config.toml when it exists. The repo value always wins.
     """
-    config = deep_merge(CORE_DEFAULTS, defaults or {})
+    config = copy.deepcopy(CORE_DEFAULTS)
+    installed = installed_defaults(repo)
+    for stage_id in sorted(installed):
+        config = deep_merge(config, installed[stage_id])
+    config = deep_merge(config, defaults or {})
     path = Path(repo) / CONFIG_REL
     if path.is_file():
         config = deep_merge(config, load_toml(path))

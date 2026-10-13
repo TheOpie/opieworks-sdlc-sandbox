@@ -1,0 +1,117 @@
+# Managed by opieworks-sdlc setup. Do not edit. Setup rewrites the table of
+# each stage that it installs. Put your values in sdlc/config.toml. They win.
+
+[build.build]
+test = ""
+api_paths = []
+token_paths = []
+visual_paths = []
+
+[build.agent_runner]
+default = "claude"
+
+[build.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[build.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
+
+[deploy.deploy]
+nit_cap = 3
+babysit_rounds = 3
+docs_dir = "docs"
+docs_build = ""
+
+[deploy.agent_runner]
+default = "claude"
+
+[deploy.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[deploy.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
+
+[design.design]
+policies = ["sdlc/policies/sample-policy.md"]
+
+[design.agent_runner]
+default = "claude"
+
+[design.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[design.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
+
+[intent.intent]
+sections = ["Problem", "Outcome", "Affected users and systems", "Constraints", "Open questions", "Lane", "Done when"]
+
+[intent.agent_runner]
+default = "claude"
+
+[intent.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[intent.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
+
+[maintain.maintain]
+window = 30
+
+[maintain.agent_runner]
+default = "claude"
+
+[maintain.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[maintain.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
+
+[testing.testing]
+verify = ""
+max_runs = 5
+
+[testing.agent_runner]
+default = "claude"
+
+[testing.agent_runner.claude]
+command = ["claude", "-p", "--strict-mcp-config"]
+read = ["--tools=Read,Grep,Glob", "--allowedTools=Read,Grep,Glob"]
+run = ["--tools=Read,Grep,Glob,Bash", "--allowedTools=Read,Grep,Glob,Bash"]
+edit = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,Glob,Edit,Write,Bash"]
+
+[testing.agent_runner.codex]
+command = ["codex", "exec"]
+read = ["-s", "read-only"]
+run = ["-s", "read-only"]
+edit = ["-s", "workspace-write"]
