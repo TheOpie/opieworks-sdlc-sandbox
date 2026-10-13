@@ -30,3 +30,6 @@ edit = ["-s", "workspace-write"]
 
 [build]
 test = "pnpm verify"
+
+[design]
+policies = ["sdlc/policies/sample-policy.md"]
