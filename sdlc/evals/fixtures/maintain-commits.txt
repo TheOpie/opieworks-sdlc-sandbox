@@ -1,0 +1,33 @@
+Output of: git log --since=2026-08-25 --stat --format='commit %h%nDate: %ad%n%n    %s%n' --date=iso-strict
+
+commit 9b2f0d1
+Date: 2026-09-01T10:12:44+00:00
+
+    Fix a typo in the README
+
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+commit 4e1c9a7
+Date: 2026-08-30T15:40:02+00:00
+
+    Retry the API client in tests with a fixed 2 second sleep
+
+ tests/helpers/api_client.py | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+commit 71aa3c5
+Date: 2026-08-28T09:05:31+00:00
+
+    Rename a local variable in the date parser
+
+ src/dates.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+commit c03e8b4
+Date: 2026-08-26T17:22:10+00:00
+
+    Add a changelog entry
+
+ CHANGELOG.md | 3 +++
+ 1 file changed, 3 insertions(+)

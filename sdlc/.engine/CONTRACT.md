@@ -164,6 +164,9 @@ ASKPASS_VARS = ("GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE")
 ASKPASS_PREFIX = "VSCODE_GIT_"
 ISOLATION_ENV = {"GH_PROMPT_DISABLED": "1", "GIT_TERMINAL_PROMPT": "0", "SSH_ASKPASS_REQUIRE": "never"}
 GIT_ISOLATION_CONFIG = (("credential.helper", ""), ("core.askPass", ""))
+BASE_ENV_ALLOWLIST = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
+                      "LANG", "TERM", "COLORTERM", "TZ", "NO_COLOR", "GIT_CONFIG_COUNT")
+BASE_ENV_PREFIXES = ("LC_", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 DRY_RUN_TOKEN = "dry-run"
 
 @dataclass
@@ -181,6 +184,7 @@ class RoleSpec:
 def parse_role_spec(path: Path) -> RoleSpec
 def read_bot_token(path: str | Path) -> str
 def build_invocation(spec, harness: str, config: dict, inputs=(), base_env=None, dry_run=False, task=None) -> tuple[list[str], dict[str, str]]
+def allowed_env_names(harness: str, config: dict) -> set[str]
 def execute(argv: list[str], env: dict[str, str], cwd: Path) -> int
 def cleanup(env: dict[str, str]) -> None
 ```
@@ -191,7 +195,7 @@ def cleanup(env: dict[str, str]) -> None
   1. Read the table `config["agent_runner"][harness]`. Raise `SdlcError` when it is absent.
   2. `argv = command + flags + [prompt]`. `flags` is the map of the strongest of `edit`, `run`, `read` in the spec. A missing map for a needed capability raises `SdlcError`.
   3. `prompt` is the spec body, then (when `task` is set) a line `Task:`, the task text, and a blank line, then a line `Inputs:`, then one line per input path.
-  4. `env` is a copy of `base_env` (default: `os.environ`) plus `ISOLATION_ENV`. The copy drops the names in `HUMAN_TOKEN_VARS` and `ASKPASS_VARS`, every name that starts with `ASKPASS_PREFIX`, every name with a `GH` or `GITHUB` word and a `TOKEN` or `PAT` word, and every value with the shape of a GitHub token (the `token:github` leak patterns). Then the entries of `GIT_ISOLATION_CONFIG` go at index n and up, where n is the `GIT_CONFIG_COUNT` of the copy (0 when it is absent or not a number that is 0 or more). `GIT_CONFIG_COUNT` becomes n plus 2. The entries below n stay.
+  4. `env` is a filtered copy of `base_env` (default: `os.environ`) plus `ISOLATION_ENV`. The copy keeps only allowlisted names (D22). `allowed_env_names` gives the allowlist: `BASE_ENV_ALLOWLIST`, the `env` list of `[agent_runner.<harness>]`, and the `env` list of `[roles]` in `sdlc/config.toml`. A name that starts with a part in `BASE_ENV_PREFIXES` also passes. Each `env` list is optional. A value that is not a list of strings, or a `[roles]` value that is not a table, raises `SdlcError`. An allowlisted name that the parent does not have is not added. Then the copy drops the names in `HUMAN_TOKEN_VARS` and `ASKPASS_VARS`, every name that starts with `ASKPASS_PREFIX`, every name with a `GH` or `GITHUB` word and a `TOKEN` or `PAT` word, and every value with the shape of a GitHub token (the `token:github` leak patterns). This GitHub credential check runs also for a name that the config allows. Then the entries of `GIT_ISOLATION_CONFIG` go at index n and up, where n is the `GIT_CONFIG_COUNT` of the copy (0 when it is absent or not a number that is 0 or more). `GIT_CONFIG_COUNT` becomes n plus 2. The entries below n stay.
   5. Only when `github-bot` is in the capabilities: set `env["GH_TOKEN"]` to `read_bot_token(config["bot"]["token_file"])`. With `dry_run=True`, do not read the file. Set `env["GH_TOKEN"]` to `DRY_RUN_TOKEN`.
   6. Set `env["GH_CONFIG_DIR"]` to a new empty temp folder, so `gh` cannot find the stored human login. The caller removes it with `cleanup(env)`.
 - `execute` runs `subprocess.run(argv, env=env, cwd=cwd)` and returns the exit code. A missing command raises `SdlcError`.
@@ -246,7 +250,7 @@ def export(skill_dir: Path, out: Path, require_denylist: bool = True) -> Path
 | `lint-portable <dir>` | `scan.lint_portable`. Exit 1 on any hit |
 | `export <skill-dir> --out <dir> [--no-denylist]` | `export.export` |
 | `push [--branch B] [--repo]` | `github.push` |
-| `pr --title T [--body B \| --body-file F] [--head] [--base] [--repo]` | `github.open_pr`. Prints the URL |
+| `pr --title T [--body B \| --body-file F] [--head] [--base] [--label L ...] [--repo]` | `github.open_pr`. Prints the URL |
 | `gates apply [--repo]` | `gates.apply` |
 | `check-bot [--repo]` | `gates.check_bot`. Prints one line per rule. Exit 1 on any FAIL |
 | `checks [--base SHA --head SHA] [--repo]` | The `sdlc-checks` CI job (section 15). Runs the test-lock seam (S3 fills it) and `evals.eval_gate`. With `--base` and `--head`, it reads a local repo through `evals.GitSource`. Else it reads the pull request in `GITHUB_EVENT_PATH` through `evals.ApiSource`. With neither, it prints a notice and exits 0. Exit 1 on any FAIL |
@@ -271,7 +275,8 @@ The `--stage-dir` default is the skill folder that holds the engine as `core/`, 
 | `bot_env(config, base_env=None) -> dict` | The env of `role.build_invocation` with no human token, plus `GH_TOKEN` and `OPIEWORKS_SDLC_BOT_SECRET` set to the bot token, an empty `GH_CONFIG_DIR`, and `GIT_CONFIG_*` entries that reset `credential.helper`, then add a helper that reads the token from the env. The token is never in argv. The caller calls `cleanup(env)` |
 | `api(method, path, body=None, env=None) -> object` | `gh api`. The body goes on stdin as JSON. `env=None` uses the login of the person who runs the command. HTTP 404 raises `NotFound` (a `SdlcError`) |
 | `push(repo, branch, config)` | `git push` as the bot. Refuses the default branch |
-| `open_pr(repo, head, title, body, config, base=None) -> url` | Opens a PR as the bot |
+| `open_pr(repo, head, title, body, config, base=None, labels=()) -> url` | Opens a PR as the bot. For each label, `ensure_label` makes it when it is absent. Then one call adds all labels to the PR. All calls use the bot env. An empty label raises `SdlcError` before the PR opens |
+| `ensure_label(slug, name, env)` | Makes the label with `LABEL_COLOR` and the text in `LABEL_DESCRIPTIONS` when the repo does not have it |
 
 The engine has no merge, approve, or deployment-approval call (FR-10).
 
@@ -312,12 +317,227 @@ def watch_hash(entries) -> str          # entries: (mode, path, blob sha)
 class GitSource(repo); class ApiSource(slug, env=None)   # blobs(rev), read(rev, path), merge_base(a, b)
 def eval_gate(source, base, head) -> GateResult           # .ok, .lines
 def load_tasks(repo, names=None) -> list[Task]
+def installed_stages(repo) -> list[str]                  # stage IDs with a section in AGENTS.md
+def resolve_role(name, stage_dir, repo) -> Path
 def run_evals(repo, stage_dir, harness, names=None, now=None) -> tuple[dict, Path]
 ```
 
-- Watched paths: every file named `AGENTS.md`, and every path under `sdlc/` except `sdlc/work/` and `sdlc/evals/results/`.
+- Watched paths: every file named `AGENTS.md`, and every path under `sdlc/` except `sdlc/work/`, `sdlc/triage/`, `sdlc/lessons/`, and `sdlc/evals/results/`.
 - `watch_hash` is the SHA-256 of the sorted lines `<mode> <blob sha>\t<path>` of the watched blobs. Git and the GitHub tree API give the same blob IDs, so a local hash and a CI hash match.
 - A source reads trees and blobs only. It never checks out or runs a commit (FR-93).
 - `eval_gate`: the PR changes a watched path when the watched blobs differ between the merge base and the head. No change: PASS. A change and no result on the base: PASS with a notice. A change and no result on the head, a result that is not valid, a hash that does not match the head, or a pass rate below the base result: FAIL.
 - A task file has `role` and `check` (required), and `prompt`, `inputs`, `setup` (optional). Other keys raise `SdlcError`.
-- `run_evals` refuses uncommitted changes in watched paths. It runs each task in a temporary detached worktree of `HEAD`: the `setup` command, then the role through `role.build_invocation` with the task `prompt` as `task` and stdin closed, then the `check` command with `EVAL_OUTPUT` (the file with the role output) and `EVAL_ROLE_EXIT`. A task passes when the role and the check exit with 0. The result holds `format`, `harness`, `head`, `watch_hash`, `created`, `tasks_total`, `tasks_passed`, `pass_rate`, and per task the raw `setup_log`, `role_log`, and `check_log`.
+- `resolve_role` tries `agents/<name>.md` in the overlay, then in `stage_dir`, then in each folder next to `stage_dir` whose `stage.toml` ID is in `installed_stages` of the worktree. The first file wins. With no file, it raises `SdlcError` that names the folders it tried. So `run-evals` from one stage runs the eval tasks of every installed stage.
+- `run_evals` refuses uncommitted changes in watched paths. It runs each task in a temporary detached worktree of `HEAD`: the `setup` command, then the role from `resolve_role` through `role.build_invocation` with the task `prompt` as `task` and stdin closed, then the `check` command with `EVAL_OUTPUT` (the file with the role output) and `EVAL_ROLE_EXIT`. A task passes when the role and the check exit with 0. The result holds `format`, `harness`, `head`, `watch_hash`, `created`, `tasks_total`, `tasks_passed`, `pass_rate`, and per task the raw `setup_log`, `role_log`, and `check_log`.
+
+## Stage: intent
+
+The intent stage (slice S2) adds `sdlc_lib/intent.py` and the `intent` CLI group. It changes one shared value: `evals.WATCH_EXCLUDE` also holds `sdlc/triage/`, because a triage record is not an agent instruction (section 15).
+
+```python
+STAGE = "intent"
+LABEL = "sdlc:intent"
+KINDS = ("bug", "feature")
+SOURCES = {"text": "free text", "thread": "thread", "issue": "issue"}
+CHANGE_KEYS = ("api_change", "token_change", "visual_change")   # values: yes, no, unknown
+DEFAULT_SECTIONS = ("Problem", "Outcome", "Affected users and systems", "Constraints", "Open questions", "Lane", "Done when")
+TRIAGE_REL = "sdlc/triage"   # intent records: sdlc/triage/intent-<id>.toml
+STATES = ("open", "accepted", "rejected", "rejected, no reason")   # OPEN, ACCEPTED, REJECTED, REJECTED_NO_REASON
+
+def propose_lane(kind, changes) -> tuple[str, str]
+def lane_problem(kind, lane, changes) -> str | None
+def new_intent(title, kind, source, repo, stage_dir, changes=None, links=None, today=None) -> tuple[str, str, str]
+def check_intent(item_id, repo, config) -> list[str]
+def set_lane(item_id, repo, lane) -> bool
+def issue_text(slug, number, env=None) -> tuple[str, str]
+def open_intent_pr(repo, item_id, config) -> str
+def list_intent_pulls(slug, env=None, max_pages=20) -> list[dict]
+def read_triage(repo, ref="HEAD") -> dict[str, dict]
+def read_lanes(repo, ref="HEAD") -> dict[str, str]
+def intent_states(pulls, triage, lanes=None) -> list[IntentState]
+def find_pull(pulls, item_id) -> dict | None
+def record_reason(repo, item_id, reason, pull, today=None) -> Path
+```
+
+- Lane rule (FR-11): `fast` only for kind `bug` with all three changes `no`. `unknown` counts as a change. `full` is always allowed. `set_lane` and `check_intent` refuse a fast lane that breaks the rule.
+- `new_intent` fills `templates/intent-<kind>.md` (overlay first, FR-21) before it makes the work item, so a bad template makes no folder. Placeholders: `work_item`, `upstream`, `kind`, `source`, `lane`, `lane_reason`, `api_change`, `token_change`, `visual_change`, `title`. The lane in the frontmatter and in `item.toml` is the engine proposal. With no link, `upstream` is `none, used <source>` (FR-3). A source `issue` needs a link.
+- `check_intent` lists problems: frontmatter keys, the lane rule, a lane that differs from `item.toml`, each section of `[intent].sections` (default `DEFAULT_SECTIONS`) missing or empty, and every line with `FILL:`.
+- `open_intent_pr` needs the current branch `sdlc/<id>/intent` and a complete intent. It calls `github.open_pr` with `labels=[LABEL]`. The shared label code makes the label when it is absent and adds it to the PR.
+- `intent_states` reads PR dicts of the pulls API (`number`, `state`, `merged_at`, `html_url`, `head.ref`, `labels`). Only a PR with the label and a branch `sdlc/<id>/intent` counts. The newest PR of an item wins. Merged gives `accepted`. Open gives `open`. Closed and not merged gives `rejected` with the reason of the triage record, else `rejected, no reason` (SCN-10). It never reads the author.
+- `read_triage` and `read_lanes` read git objects at a ref with `ls-tree` and `show`. They never check out the ref.
+- `record_reason` refuses an empty reason, no PR, an open PR, and a merged PR. It writes `work_item`, `stage`, `decision`, `reason`, `pr`, `closed_at`, and `recorded`. The engine has no call that closes or merges a PR (FR-10).
+
+| Command | Calls |
+|---|---|
+| `intent new <title> --kind bug\|feature --source text\|thread\|issue [--upstream LINK ...] [--api-change V] [--token-change V] [--visual-change V] [--stage-dir] [--repo]` | `intent.new_intent`. Prints the ID, the proposed lane, and the path |
+| `intent issue <number> [--repo]` | `intent.issue_text` with the human login. Read only |
+| `intent check <id> [--repo]` | `intent.check_intent`. Exit 1 on any problem |
+| `intent lane <id> fast\|full [--repo]` | `intent.set_lane` |
+| `intent pr <id> [--repo]` | `intent.open_intent_pr`. Prints the URL |
+| `intent status [<id>] [--ref REF] [--repo]` | `list_intent_pulls` with the human login, `read_triage`, `read_lanes`, `intent_states`. Read only |
+| `intent record-reason <id> --reason TEXT [--repo]` | `find_pull`, `record_reason` |
+
+## Stage: build
+
+`sdlc_lib/build.py` (S3). The `checks` command calls `build.test_lock` in place of the old test-lock seam. That is the only change to the `checks` path.
+
+```python
+CONFIG_TABLE = "build"   # keys: test (str), api_paths, token_paths, visual_paths (lists of fnmatch patterns)
+STATUSES = ("draft", "accepted")
+BREACH_KINDS = ("none", "api", "token", "visual")
+PHASES = ("plan", "test", "code")
+BREACH_EXIT = 4
+def parse_plan(text, where="plan.md") -> Plan          # work_item, lane, status, breach, breach_reason, locked_tests, body
+def init_plan(item_id, repo, stage_dir, lane=None, links=None, fallback=None, request=None) -> Path
+def build_check(item_id, repo, phase, config, base=None, runner=None) -> CheckResult   # .code, .lines
+def test_lock(source, base, head) -> evals.GateResult
+```
+
+- plan.md frontmatter: `work_item`, `upstream`, `stage: build`, `lane`, `status`, `breach`, `breach_reason`, `locked_tests` (a list of safe repo-relative file paths). A bad value raises `SdlcError`.
+- `init_plan` fills `templates/plan.md` (overlay first). Placeholders: `work_item`, `upstream`, `lane`, `request`, `planner_pending`, `acceptance_pending`. The lane comes from the argument, else `item.toml`, else `intent.md`. Upstream links are the given links, else `intent.md` and `spec.md` in the folder, else `none, used <fallback>` with the default fallback `user request` (FR-44). With no upstream, `request` is required. It refuses an existing plan.md.
+- `build_check`: every phase checks plan.md. A fast-lane plan with a breach other than `none` returns `BREACH_EXIT` and a message that says to push nothing and names `opieworks-sdlc-design` (FR-11, SCN-4). Else the planner PENDING line and a fast-lane plan with no locked test are problems. `test`: the locked tests exist, and the `[build].test` command exits non-zero. `code`: acceptance (fast: `status: accepted` and no acceptance PENDING line, full: plan.md exists on `base`), a fast-lane change to a path that matches a `*_paths` pattern returns `BREACH_EXIT`, and each changed path outside `sdlc/work/` that plan.md does not name as a whole path is drift (FR-42). Changed paths are the diff from the merge base with `base` to the work tree, plus untracked files. Exit codes: 0 pass, 1 problems, 4 breach.
+- `test_lock` (FR-41): lists the PR commits from the merge base to `head`, parents first (git `rev-list`, or the GitHub compare API, which must return every commit). A `plan.md` under `sdlc/work/<id>/` that differs from the merge base in a commit locks each `locked_tests` path that the commit tree has, as (mode, blob sha). A commit inherits the locks of all its parents in the PR, so the lock set is the union across all PR commits and a removed entry or plan does not unlock. A commit whose tree has another mode or blob, or no file, for a lock fails, once per lock. A locked path that no PR commit has fails. In the fast lane, a lock must start in the first commit that changes its plan, and a fast-lane plan at the head must lock a test. A plan that the PR does not change locks nothing. It reads trees and blobs only, never a checkout or a run (FR-93). An `SdlcError` becomes a FAIL line.
+
+CLI (one block in `sdlc.py`, marked "Stage: build"):
+
+| Command | Calls |
+|---|---|
+| `plan-init <id> [--lane fast\|full] [--request TEXT] [--upstream LINK ...] [--fallback TEXT] [--stage-dir] [--repo]` | `build.init_plan` |
+| `build-check <id> --phase plan\|test\|code [--base REF] [--repo]` | `build.build_check` with `common.load_config`. Exit 4 on a fast-lane breach. `--base` default: `origin/HEAD`, else `main` |
+
+## Stage: design
+
+The design stage (S4) adds the module `design` and three CLI commands. It changes no other module.
+
+```python
+CONFIG_TABLE = "design"   # key: policies (list of repo-relative file paths)
+SPEC_TEMPLATE = "templates/spec.md"
+FALLBACK = "inline problem statement"
+
+@dataclass
+class Flag:
+    id: str            # "FLAG-<n>"
+    text: str
+    resolution: str    # "" or "open" means that the flag is open
+    open: bool         # property
+
+def policy_list(config) -> list[str]
+def policy_paths(repo, config) -> list[str]   # repo-relative POSIX strings
+def draft_body(draft: str) -> str
+def parse_flags(body: str) -> list[Flag]
+def check_policy_section(body: str, policies: list[str]) -> None
+def write_spec(item_id, repo, stage_dir, draft, config, problem=None, links=None) -> tuple[Path, list[Flag]]
+def check_flag_history(old: list[Flag], new: list[Flag]) -> None
+def check_spec(item_id, repo, config) -> list[Flag]
+```
+
+- `policy_paths` raises `SdlcError` when a configured file is missing, or when a path is not safe. An absent `[design]` table gives an empty list.
+- Sections are level-2 headings (`## <name>`) outside a code fence. `draft_body` drops the text before the first one. A draft with none raises `SdlcError`.
+- `parse_flags` (FR-31): the body has exactly one `## Flags` section. The section holds the line `None.`, or one or more lines `- FLAG-<n>: <text>`. Indented lines continue the last flag. An indented `Resolution: <text>` line sets its resolution. Any other line, both `None.` and a flag, no content, or a repeated flag ID raises `SdlcError`.
+- `check_policy_section` (FR-30): the body has exactly one `## Policy check` section, and it names each configured policy path as text.
+- `write_spec`: all checks run before the write. Upstream (FR-3, FR-6, FR-34): with `problem`, the work item must have no `intent.md` and no `links`. The frontmatter value is `none, used inline problem statement`, and the source section quotes the problem. Else the `links`, else `intent.md` when it exists. Else `SdlcError`. The template (overlay first) has the placeholders `work_item`, `upstream`, `policies`, `source`, and `body`. An unknown placeholder raises `SdlcError`. When `spec.md` exists, `write_spec` reads its flags and calls `check_flag_history`. The write uses `write_if_changed` (NFR-3).
+- `check_flag_history` (FR-31, CON-4): it raises `SdlcError` when the new draft drops a flag ID of the earlier spec, or when a draft flag has a resolution that is not open and is not the human resolution of the earlier spec, word for word. With no earlier spec, a draft flag that is not open raises `SdlcError`.
+- `check_spec` reads `sdlc/work/<id>/spec.md`. It raises `SdlcError` when the file is missing, when `work_item` is not the ID, when `upstream` is absent, or when a section check fails.
+
+| Command | Calls |
+|---|---|
+| `policies [--repo]` | `design.policy_paths`. Prints one path per line, or a notice when none is configured |
+| `spec <id> --draft FILE [--problem TEXT \| --problem-file FILE] [--upstream LINK ...] [--stage-dir] [--repo]` | `design.write_spec`. Prints the flag count and each open flag. Exit 0 also with open flags |
+| `spec-check <id> [--repo]` | `design.check_spec`. Exit 1 while a flag is open |
+
+## Stage: deploy
+
+Module `sdlc_lib/deploy.py` (S5, FR-60 to FR-64). The roles do no GitHub call. The engine does each GitHub call for them as the bot, through `github.bot_env` and `github.api`. The module has no approve, merge, or deployment-approval call (FR-10).
+
+```python
+CONFIG_TABLE = "deploy"   # keys: nit_cap (int >= 0), babysit_rounds (int >= 1), docs_dir (str), docs_build (str)
+def parse_findings(text) -> Review                 # .verdict, .findings, .blocked, .not_reported
+def rank(findings, nit_cap) -> tuple[list[Finding], int]
+def write_review(item_id, repo, stage_dir, review, nit_cap, links=None, fallback=None) -> Path
+def comment_body(review_text) -> str
+def post_comment(slug, pr, body, config, dry_run=False) -> str
+def babysit(repo, stage_dir, pr_number, harness, config, dry_run=False) -> BabysitResult
+def canary_payload(item_id, tag, target) -> dict
+def canary(repo, item_id, tag, target, config, dry_run=False) -> str
+def production(repo, source, item_id, config, dry_run=False, sleep=time.sleep, polls=10) -> ProductionRun
+def history(repo, config, limit=10, dry_run=False) -> list[dict]
+def rollback_source(rows) -> tuple[str, str]
+def build_docs(repo, config, source, out) -> dict
+```
+
+- Reviewer report format: a `Verdict:` line (`FINDINGS`, `NO FINDINGS`, or `BLOCKED`), then lines `<n>. <important|nit> | <bug|security|compliance> | <location> | <title>`, each with indented detail lines, then `Not reported:` and, for `BLOCKED`, `Blocked:`. `parse_findings` reads from the last `Verdict:` line and skips fence lines, so harness text before the report does no harm. A verdict that does not match the finding lines raises `SdlcError`.
+- `rank`: important findings first, then nits, each in the order of the reviewer. Only the first `nit_cap` nits stay. The second value is the number of hidden nits.
+- `write_review` fills `templates/review.md` (overlay first) and writes `sdlc/work/<id>/review.md`. Placeholders: `work_item`, `upstream`, `verdict`, `marker`, `counts`, `not_reported`, `findings`. `upstream` links `intent.md`, `spec.md`, `plan.md`, and `evidence.md` when they exist, else `none, used <fallback>` with the default `PR description` (FR-3).
+- `post_comment` posts an issue comment (`POST repos/<slug>/issues/<pr>/comments`) as the bot. An issue comment cannot approve. A dry run makes no call and does not read the bot token file.
+- `babysit`: one round. It refuses a closed PR, a PR from a fork, a local branch that is not the PR head branch, uncommitted changes, and a local HEAD that is not the PR head. The round count is the number of bot comments with `BABYSIT_MARKER`. At the limit (`deploy.babysit_rounds`) it returns `handoff` and does nothing more. With no comment and no failed check it returns `handoff`. Else it writes the PR description, the comments, the reviews, and the failed check runs to a temp file, runs `agents/babysitter.md` (capability `edit`, no bot token) through `role.build_invocation` and `role.execute`, commits the changes, pushes the branch with `github.push`, and posts a comment with `BABYSIT_MARKER` that asks `codeowners.owner` to approve again. After the last round, `handoff` is True. A role that makes no change gives `handoff` and no push. A dry run reads with the human login and does not run the role, push, or post.
+- `canary_payload` always has `prerelease: true`, `draft: false`, and `make_latest: "false"`. `canary` posts it as the bot and raises `SdlcError` when the answer has no prerelease flag.
+- `production` reads the default branch as the bot, resolves the source to a full commit SHA (default: the head of the default branch), and dispatches `PRODUCTION_WORKFLOW` on the default branch with the inputs `source_sha` and `work_item`. It has no parameter for another branch. It finds the new run and returns its URL. It never approves the deployment.
+- `history` lists the runs of `PRODUCTION_WORKFLOW`. The source commit comes from the run name `production <sha> (<work item>)`. `rollback_source` gives the source of the newest successful run and of the newest earlier successful run with a different source. It raises `SdlcError` when there is none.
+- `build_docs` runs in the production job. It refuses a source that is not in the history of HEAD (`git merge-base --is-ancestor`), so a rollback also deploys only merged commits. It builds in a temporary detached worktree of the source: it runs `deploy.docs_build` when it is not empty, then copies `deploy.docs_dir` to `out` and writes `out/sdlc-build.json` with the source commit. It removes the worktree.
+
+CLI block (one contiguous block in `sdlc.py`, marked "Stage: deploy"):
+
+| Command | Calls |
+|---|---|
+| `deploy review-post <id> --findings FILE [--pr N] [--upstream L ...] [--fallback T] [--dry-run] [--stage-dir] [--repo]` | `parse_findings`, `write_review`, and with `--pr` `post_comment` |
+| `deploy babysit <pr> --harness <h> [--dry-run] [--stage-dir] [--repo]` | `babysit`. Prints one line per step. A `handoff:` line means that the babysitter stops |
+| `deploy canary <id> --tag T [--target REF] [--dry-run] [--repo]` | `canary` |
+| `deploy production [--source REF] [--item ID] [--dry-run] [--repo]` | `production` |
+| `deploy history [--limit N] [--repo]` | `history` |
+| `deploy rollback [--to SHA] [--item ID] [--dry-run] [--repo]` | `history`, `rollback_source`, `production` |
+| `deploy build-docs --source SHA --out DIR [--repo]` | `build_docs`. CI only |
+
+The stage installs `github/workflows/sdlc-deploy-production.yml` (managed). It has only a `workflow_dispatch` trigger and one job, bound to the environment `production` that `gates apply` protects. It checks out the dispatched commit with the full history and runs `deploy build-docs` from `sdlc/.engine/`.
+
+## Stage: maintain (S6)
+
+`sdlc_lib/maintain.py` holds the engine of the maintain stage. `detect` is deterministic (NFR-4). It never starts a role or a model. Its only network calls are the issue writes, and only with `--issues`.
+
+```python
+CONFIG_TABLE = "maintain"   # keys: window (int >= 2). C3: 30 readings
+BANDS_REL = "sdlc/bands.toml"
+DATA_BRANCH = "sdlc-data"
+READINGS_DIR = "sdlc/maintain/readings"       # on DATA_BRANCH: <metric>.csv
+LAST_RUN_REL = "sdlc/maintain/last-run.json"  # on DATA_BRANCH
+TRIAGE_REL = "sdlc/triage"; LESSONS_REL = "sdlc/lessons"
+TIERS = ("ok", "log", "diagnose", "propose"); WARMUP = "warmup"; ERROR = "error"
+DEFAULT_SIGMAS = {"log": 1.0, "diagnose": 2.0, "propose": 3.0}   # playbook
+CSV_HEADER = ("time", "value", "mean", "sigma", "z", "tier")
+ISSUE_LABEL = "sdlc:maintain"
+DECISIONS = ("fix-now", "schedule", "dismiss")
+
+def load_bands(repo) -> list[Metric]
+def window_size(config) -> int
+def evaluate(value, history: list[float], metric, window) -> Reading
+def detect(repo, metrics, window, now=None, runner=None, record=True) -> DetectReport
+def file_issues(slug, report, env=None, api=None) -> list[str]
+def last_run(repo) -> dict | None
+def readings_text(repo, metric) -> str
+def new_finding(repo, stage_dir, metric, issue=None, lane="full", today=None) -> tuple[str, Path]
+def triage(repo, item_id, decision, reason=None, issue=None, now=None) -> Path
+def new_lesson(repo, stage_dir, item_id, pr=None, today=None) -> Path
+def close_check(repo, item_id) -> list[str]
+```
+
+- `sdlc/bands.toml`: one table `[metrics.<name>]` per metric. The name has lowercase letters, digits, and hyphens. Keys: `command` (required, prints one number on its last line), `baseline` and `sigma` (optional fixed values), `bad` (`high`, `low`, or `both`, default `both`), `tiers` (optional `log`, `diagnose`, `propose` limits in sigma units, more than 0 and in that order), `description`. Other keys raise `SdlcError`. A missing file gives no metrics.
+- `evaluate`: a part of the baseline that the metric does not fix comes from the last `window` readings of history: `statistics.fmean` and the sample `statistics.stdev`. When that part is needed and history has fewer than `window` readings, the tier is `warmup`. `z = (value - mean) / sigma`. With sigma 0, z is 0 for the same value, else infinite. The deviation is `abs(z)`, or only the positive side for `bad = "high"`, or only the negative side for `bad = "low"`. The tier is the highest limit that the deviation reaches.
+- `detect` runs each command in a shell in the repo. A non-zero exit or a last line that is not a finite number gives the tier `error` for that metric, and the other metrics still run. It appends one row per metric to `<metric>.csv` and writes `last-run.json` (`format`, `time`, `window`, and per metric `value`, `tier`, `z`, `command`, `error`). It commits with git plumbing (a temporary index, `commit-tree`, `update-ref`) on the local branch `sdlc-data`. It builds on the local branch, else on `origin/sdlc-data`, else it makes a root commit. It never changes the work tree, the index, or HEAD. It does not fetch or push. The commit date is the run time, so the same series and clock give the same commit. Numbers in the CSV have at most 6 decimals (`fmt`).
+- `file_issues`: for each result at `diagnose` or `propose`, it finds the open issue with the label `sdlc:maintain` and the title `sdlc detect: <metric> at <tier>`. It comments on that issue, else it opens a new issue with the label. It reads every page of open issues and skips pull requests.
+- `last_run` is the seam for the hub warning (FR-84). It returns the parsed `last-run.json` from `sdlc-data`, or None. Its `time` is UTC ISO 8601 with a `Z`.
+- `new_finding` makes a work item with `workitem.new_item("<metric> <tier> breach", lane)` and writes `sdlc/work/<id>/intent.md` from `templates/intent.md` (overlay first). The stage needs no intent stage (D7). With an issue, `upstream` lists `issue #<n>` and the readings path. With no issue, it is `none, used the command that prints the number, <command>` (FR-3).
+- `triage` adds one entry `## <time>: <decision>` with the issue and the reason to `sdlc/triage/<id>.md`. It makes the file with frontmatter when it is absent. Old entries stay. A dismiss with no reason raises `SdlcError`.
+- `new_lesson` writes `sdlc/lessons/<id>.md` from `templates/lesson.md` and refuses when it exists. `close_check` lists the problems: a missing lesson, a lesson with a `PENDING:` line, a missing `sdlc/evals/tasks/<id>.toml`, or a task that `evals.load_tasks` rejects.
+
+CLI (one block in `sdlc.py`, marked "Stage: maintain"):
+
+| Command | Calls |
+|---|---|
+| `detect [--metric NAME ...] [--command CMD] [--issues] [--dry-run] [--repo]` | `select_metrics`, `detect`, then `file_issues` with `--issues`. In GitHub Actions (`GITHUB_ACTIONS=true`) the issues use the job token and `GITHUB_REPOSITORY`. Else they use `github.bot_env`. Exit 1 when a metric has the tier `error` |
+| `readings <metric> [--repo]` | `readings_text` |
+| `last-run [--repo]` | `last_run`. Prints the time. Exit 1 when no run is recorded |
+| `finding <metric> [--issue N] [--lane fast\|full] [--stage-dir] [--repo]` | `new_finding`. Prints the ID, then the path |
+| `triage <id> --decision fix-now\|schedule\|dismiss [--reason T] [--issue N] [--repo]` | `triage` |
+| `lesson <id> [--pr N] [--stage-dir] [--repo]` | `new_lesson` |
+| `close-check <id> [--repo]` | `close_check`. Exit 1 on any problem |
+
+The workflow `sdlc-detect.yml` runs only on `workflow_dispatch` (D24, no schedule) with `contents: write` and `issues: write`. It fetches `sdlc-data` when the branch exists, runs `python3 sdlc/.engine/sdlc.py detect --issues`, and pushes `sdlc-data`. It has no model step (D15).

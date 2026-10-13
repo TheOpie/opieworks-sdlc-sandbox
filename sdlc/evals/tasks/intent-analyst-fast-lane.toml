@@ -1,0 +1,4 @@
+# FR-11: a bug with no API, token, or visual change gets the fast lane.
+role = "intent-analyst"
+inputs = ["sdlc/evals/fixtures/intent-source-logic-bug.md"]
+check = "grep -Eiq '^[^a-z]*kind[^a-z]*bug' \"$EVAL_OUTPUT\" && grep -Eiq 'proposed lane[^a-z]*fast' \"$EVAL_OUTPUT\""

@@ -79,6 +79,7 @@ command = ["<harness command>", "<flag that runs one prompt>"]
 read    = ["<flags that allow file reads only>"]
 run     = ["<flags that also allow shell commands>"]
 edit    = ["<flags that also allow file edits>"]
+env     = []  # optional: more environment variable names for this harness
 ```
 
 The engine runs `command`, then the flags of the strongest capability of the role (`edit`, then `run`, then `read`), then the prompt as the last argument. A role with only `github-bot` gets the `read` flags. This engine version does not read `default`. Give `--harness <name>` on each `role` command. Check the flags against the documentation of your harness version. The Harness notes section has examples.
@@ -106,6 +107,22 @@ A role spec is a markdown file in `agents/`. Its frontmatter has `name`, `stage`
 - An `--input` path is relative to the current folder. The engine gives it to the role process relative to the repo.
 - The engine gives the bot token to the role process only when the role has the `github-bot` capability.
 - A role without the `edit` capability must not change the repo. The engine compares the git status and the content of changed files before and after the role. When the role changed a file outside `sdlc/work/`, or made a commit, the `role` command exits with code 3 and lists the paths. The engine does not undo the changes. Files that `.gitignore` ignores are not checked.
+
+### The role environment
+
+A role process gets only the environment variables on an allowlist. Other variables, for example API keys for other services, do not reach the role. A role can copy a value into a file that goes into a commit, so keep the list short.
+
+- The engine always allows `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TMP`, `TEMP`, `LANG`, `TERM`, `COLORTERM`, `TZ`, `NO_COLOR`, and every `LC_*` variable. It also keeps the `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>` entries that the caller has.
+- To allow a variable for one harness, add its name to the `env` list of `[agent_runner.<harness>]` in `sdlc/config.toml`. Use this for a variable that the harness needs to sign in or to run.
+- To allow a variable for every role in the repo, add its name to the `env` list of `[roles]` in `sdlc/config.toml`. Use this for a variable that the verify command or the tests need.
+- Write names only. Never write a value in `sdlc/config.toml`.
+- The engine removes a GitHub credential also when a list names it.
+- Run `role <role> --harness <name> --dry-run` to see the names that the role gets. The dry run never shows a value.
+
+```toml
+[roles]
+env = ["DATABASE_URL"]
+```
 
 The engine isolates each role process from the GitHub login of the human user. It does these things:
 
@@ -212,6 +229,8 @@ edit    = ["--tools=Read,Grep,Glob,Edit,Write,Bash", "--allowedTools=Read,Grep,G
 ```
 
 Use the `=` form. `--tools` and `--allowedTools` take a list of values, so a flag value after a space also takes the prompt. `--tools` limits the tools. `--allowedTools` approves them for `-p` mode. `--allowedTools` alone does not limit the tools. `--strict-mcp-config` starts the role with no MCP server, because an MCP server can hold a login of the human user. The `run` map gives a shell, and a shell can write files.
+
+Claude Code reads a stored login from the home folder or the system keychain, so the table needs no `env` list. When Claude Code signs in with an API key variable instead, add the name of that variable to `env`.
 {{end}}
 
 ### Codex
@@ -230,4 +249,6 @@ edit    = ["-s", "workspace-write"]
 ```
 
 The read-only sandbox runs commands and blocks file writes, so a `run` role cannot edit. Codex has no mode without a shell, so `read` also runs commands. A command that must write files, for example to a cache, fails in the read-only sandbox.
+
+Codex reads a stored login from its folder in the home folder, so the table needs no `env` list. When Codex signs in with an API key variable instead, add the name of that variable to `env`.
 {{end}}

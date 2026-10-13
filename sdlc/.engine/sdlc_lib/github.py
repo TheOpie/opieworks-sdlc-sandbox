@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from . import role
@@ -192,8 +193,28 @@ def push(repo: Path, branch: str, config: dict) -> None:
         cleanup(env)
 
 
-def open_pr(repo: Path, head: str, title: str, body: str, config: dict, base: str | None = None) -> str:
-    """Open a PR from head as the bot. Return the PR URL."""
+LABEL_COLOR = "1d76db"
+LABEL_DESCRIPTIONS = {
+    "sdlc:intent": "opieworks-sdlc intent PR. Merge accepts the intent. Close rejects it.",
+}
+_PR_NUMBER = re.compile(r"/pull/([0-9]+)/?$")
+
+
+def ensure_label(slug: str, name: str, env: dict[str, str]) -> None:
+    """Make the label when the repo does not have it."""
+    try:
+        api("GET", f"repos/{slug}/labels/{urllib.parse.quote(name, safe='')}", env=env)
+    except NotFound:
+        description = LABEL_DESCRIPTIONS.get(name, "opieworks-sdlc pull request.")
+        api("POST", f"repos/{slug}/labels", {"name": name, "color": LABEL_COLOR, "description": description}, env=env)
+
+
+def open_pr(repo: Path, head: str, title: str, body: str, config: dict, base: str | None = None,
+            labels=()) -> str:
+    """Open a PR from head as the bot. Add each label as the bot. Return the PR URL."""
+    labels = [label.strip() for label in labels]
+    if any(not label for label in labels):
+        raise SdlcError("A label is empty. Give a label name, for example sdlc:design.")
     slug = origin_slug(repo)
     env = bot_env(config)
     try:
@@ -203,9 +224,17 @@ def open_pr(repo: Path, head: str, title: str, body: str, config: dict, base: st
             {"title": title, "head": head, "base": base, "body": body},
             env=env,
         )
+        url = data["html_url"]
+        if labels:
+            match = _PR_NUMBER.search(url)
+            if not match:
+                raise SdlcError(f"The PR URL {url} has no PR number. Add the labels {', '.join(labels)} by hand.")
+            for label in labels:
+                ensure_label(slug, label, env)
+            api("POST", f"repos/{slug}/issues/{match.group(1)}/labels", {"labels": labels}, env=env)
     finally:
         cleanup(env)
-    return data["html_url"]
+    return url
 
 
 def which_git_login(repo: Path, config: dict) -> str:

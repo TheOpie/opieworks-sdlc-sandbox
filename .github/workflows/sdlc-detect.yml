@@ -1,0 +1,50 @@
+# Managed by opieworks-sdlc. Setup rewrites this file. Do not edit it.
+#
+# FR-71, D24: a human starts the detect job by hand. It uses no model (NFR-4). It
+# runs the metric commands in sdlc/bands.toml, adds one reading per metric
+# to the sdlc-data branch, and opens or comments on one issue per metric
+# and tier at 2 sigma (diagnose) and 3 sigma (propose). A human starts the
+# diagnoser. No agent job runs here (D15).
+#
+# The job has no schedule (D24). To add one, put a schedule trigger in a
+# copy of this workflow. The hub warns when the last detect run is older
+# than 50 days.
+name: sdlc-detect
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sdlc-detect
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: sdlc-detect
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fetch the readings branch
+        run: |
+          if git ls-remote --exit-code --heads origin sdlc-data > /dev/null; then
+            git fetch --no-tags origin "+refs/heads/sdlc-data:refs/heads/sdlc-data"
+          else
+            echo "notice: the sdlc-data branch does not exist yet. Detect makes it."
+          fi
+      - name: Detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 sdlc/.engine/sdlc.py detect --issues
+      - name: Push the readings
+        if: ${{ !cancelled() }}
+        run: |
+          if git rev-parse --verify -q refs/heads/sdlc-data > /dev/null; then
+            git push origin "refs/heads/sdlc-data:refs/heads/sdlc-data"
+          else
+            echo "notice: no readings to push."
+          fi

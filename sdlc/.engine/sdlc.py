@@ -113,7 +113,7 @@ def cmd_pr(args):
     repo, _slug, config = _slug_config(args)
     head = args.head or github.git(repo, "symbolic-ref", "--short", "HEAD").strip()
     body = Path(args.body_file).read_text(encoding="utf-8") if args.body_file else (args.body or "")
-    print(github.open_pr(repo, head, args.title, body, config, base=args.base))
+    print(github.open_pr(repo, head, args.title, body, config, base=args.base, labels=args.label))
     return 0
 
 
@@ -139,8 +139,11 @@ def cmd_check_bot(args):
 
 
 def _test_lock(source, base, head):
-    """The test-lock check (FR-41). Slice S3 builds it. It finds nothing yet."""
-    return ["test-lock: not installed yet."], True
+    """The test-lock check (FR-41). The build stage owns it."""
+    from sdlc_lib import build
+
+    result = build.test_lock(source, base, head)
+    return result.lines, result.ok
 
 
 def cmd_checks(args):
@@ -221,6 +224,31 @@ def cmd_run_evals(args):
     print("pass rate: {} of {}".format(result["tasks_passed"], result["tasks_total"]))
     print("wrote " + path.relative_to(repo).as_posix())
     return 0
+
+
+# Stage: build (S3). plan-init and build-check. The test-lock runs in checks.
+
+
+def cmd_plan_init(args):
+    from sdlc_lib import build
+
+    path = build.init_plan(args.item_id, _repo(args), _stage_dir(args), lane=args.lane, links=args.upstream,
+                           fallback=args.fallback, request=args.request)
+    print("wrote " + path.relative_to(_repo(args)).as_posix())
+    return 0
+
+
+def cmd_build_check(args):
+    from sdlc_lib import build, common
+
+    repo = _repo(args)
+    result = build.build_check(args.item_id, repo, args.phase, common.load_config(repo), base=args.base)
+    for line in result.lines:
+        print(line)
+    return result.code
+
+
+# End of stage: build.
 
 
 def cmd_resolve(args):
@@ -328,6 +356,495 @@ def cmd_export(args):
     return 0
 
 
+# Stage: intent (slice S2) --------------------------------------------------------
+
+
+def cmd_intent_new(args):
+    from sdlc_lib import intent
+
+    repo = _repo(args)
+    changes = {"api_change": args.api_change, "token_change": args.token_change, "visual_change": args.visual_change}
+    item_id, lane, reason = intent.new_intent(
+        args.title, args.kind, args.source, repo, _stage_dir(args), changes=changes, links=args.upstream,
+    )
+    print(item_id)
+    print("proposed lane: {} ({})".format(lane, reason))
+    print("wrote " + "sdlc/work/{}/{}".format(item_id, intent.INTENT_NAME))
+    return 0
+
+
+def cmd_intent_issue(args):
+    from sdlc_lib import github, intent
+
+    _url, text = intent.issue_text(github.origin_slug(_repo(args)), args.number)
+    sys.stdout.write(text)
+    return 0
+
+
+def cmd_intent_check(args):
+    from sdlc_lib import common, intent
+
+    repo = _repo(args)
+    problems = intent.check_intent(args.item_id, repo, common.load_config(repo))
+    for problem in problems:
+        print("problem: " + problem)
+    print("intent check: " + ("FAIL" if problems else "PASS"))
+    return 1 if problems else 0
+
+
+def cmd_intent_lane(args):
+    from sdlc_lib import intent
+
+    changed = intent.set_lane(args.item_id, _repo(args), args.lane)
+    print("lane: {}{}".format(args.lane, "" if changed else " (no changes)"))
+    return 0
+
+
+def cmd_intent_pr(args):
+    from sdlc_lib import common, intent
+
+    repo = _repo(args)
+    print(intent.open_intent_pr(repo, args.item_id, common.load_config(repo)))
+    return 0
+
+
+def cmd_intent_status(args):
+    from sdlc_lib import github, intent
+
+    repo = _repo(args)
+    pulls = intent.list_intent_pulls(github.origin_slug(repo))
+    states = intent.intent_states(pulls, intent.read_triage(repo, args.ref), intent.read_lanes(repo, args.ref))
+    if args.item_id:
+        intent.check_item_id(args.item_id)
+        states = [s for s in states if s.item_id == args.item_id]
+        if not states:
+            print("{}  no intent PR".format(args.item_id))
+            return 0
+    if not states:
+        print("No intent PR found with the label {}.".format(intent.LABEL))
+    for state in states:
+        print(state.format())
+    return 0
+
+
+def cmd_intent_record_reason(args):
+    from sdlc_lib import github, intent
+
+    repo = _repo(args)
+    intent.check_item_id(args.item_id)
+    pull = intent.find_pull(intent.list_intent_pulls(github.origin_slug(repo)), args.item_id)
+    path = intent.record_reason(repo, args.item_id, args.reason, pull)
+    print("wrote " + path.relative_to(repo).as_posix())
+    return 0
+
+
+def add_intent_parsers(sub):
+    """The intent stage commands (slice S2)."""
+    intent_parser = sub.add_parser("intent", help="Intent stage: intent.md, the lane, the intent PR, and its gate state.")
+    intent_sub = intent_parser.add_subparsers(dest="intent_command", metavar="intent-command")
+    intent_sub.required = True
+
+    p = intent_sub.add_parser("new", help="Make a work item and write intent.md from the template.")
+    p.add_argument("title", help="Short title of the work item.")
+    p.add_argument("--kind", required=True, choices=("bug", "feature"), help="Kind of the work item.")
+    p.add_argument("--source", required=True, choices=("text", "thread", "issue"), help="Kind of input.")
+    p.add_argument("--upstream", action="append", default=[], help="Upstream link, for example the issue URL. Repeat for more links.")
+    for name in ("api", "token", "visual"):
+        p.add_argument("--{}-change".format(name), default="unknown", choices=("yes", "no", "unknown"),
+                       help="Does the work change the {}? Default: unknown.".format(name))
+    p.add_argument("--stage-dir", help="Stage skill folder. Default: the skill folder that holds this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_new)
+
+    p = intent_sub.add_parser("issue", help="Print a GitHub issue and its comments as text. Read only.")
+    p.add_argument("number", type=int, help="Issue number.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_issue)
+
+    p = intent_sub.add_parser("check", help="Check that intent.md is complete.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_check)
+
+    p = intent_sub.add_parser("lane", help="Set the lane in intent.md and item.toml.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("lane", choices=("fast", "full"), help="The lane.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_lane)
+
+    p = intent_sub.add_parser("pr", help="Open the intent PR as the bot with the label sdlc:intent.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_pr)
+
+    p = intent_sub.add_parser("status", help="Show the gate state of intent PRs. Read only.")
+    p.add_argument("item_id", nargs="?", help="Show only this work item.")
+    p.add_argument("--ref", default="HEAD", help="Git ref to read triage records and lanes from. Default: HEAD.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_status)
+
+    p = intent_sub.add_parser("record-reason", help="Write the reason of a human who closed an intent PR to sdlc/triage/.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("--reason", required=True, help="The reason, in the words of the human.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_intent_record_reason)
+
+# End of stage: intent ------------------------------------------------------------
+
+
+# Stage: design (S4) ------------------------------------------------------------
+
+
+def cmd_policies(args):
+    from sdlc_lib import common, design
+
+    repo = _repo(args)
+    found = design.policy_paths(repo, common.load_config(repo))
+    if not found:
+        print("No policy files are configured. Add [design].policies to sdlc/config.toml.")
+    for rel in found:
+        print(rel)
+    return 0
+
+
+def _print_flags(flags):
+    open_flags = [flag for flag in flags if flag.open]
+    print("flags: {} ({} open)".format(len(flags), len(open_flags)))
+    for flag in open_flags:
+        print("open flag: {} {}".format(flag.id, flag.text))
+    return open_flags
+
+
+def cmd_spec(args):
+    from sdlc_lib import common, design
+
+    repo = _repo(args)
+    stage_dir = _stage_dir(args)
+    draft = Path(args.draft).read_text(encoding="utf-8")
+    problem = args.problem
+    if args.problem_file:
+        problem = Path(args.problem_file).read_text(encoding="utf-8")
+    path, flags = design.write_spec(
+        args.item_id, repo, stage_dir, draft, common.load_config(repo), problem=problem, links=args.upstream or None,
+    )
+    print("wrote " + path.relative_to(repo).as_posix())
+    if _print_flags(flags):
+        print("The gate owner resolves each open flag before the spec merges.")
+    return 0
+
+
+def cmd_spec_check(args):
+    from sdlc_lib import common, design
+
+    repo = _repo(args)
+    flags = design.check_spec(args.item_id, repo, common.load_config(repo))
+    if _print_flags(flags):
+        print("spec-check: FAIL. Resolve each open flag before the spec merges.")
+        return 1
+    print("spec-check: PASS")
+    return 0
+
+# End of stage: design ----------------------------------------------------------
+
+
+# Stage: deploy (S5). The deploy commands are in this one block. -------------
+
+
+def cmd_deploy_review_post(args):
+    from sdlc_lib import common, deploy, github
+
+    repo = _repo(args)
+    config = common.load_config(repo)
+    nit_cap = deploy.int_setting(config, "nit_cap", 0)
+    review = deploy.parse_findings(Path(args.findings).read_text(encoding="utf-8"))
+    path = deploy.write_review(args.item_id, repo, _stage_dir(args), review, nit_cap,
+                               links=args.upstream, fallback=args.fallback)
+    print("verdict: " + review.verdict)
+    print("findings: " + deploy.counts(review, nit_cap))
+    print("wrote " + path.relative_to(repo).as_posix())
+    if args.pr is not None:
+        body = deploy.comment_body(path.read_text(encoding="utf-8"))
+        print(deploy.post_comment(github.origin_slug(repo), args.pr, body, config, dry_run=args.dry_run))
+    return 0
+
+
+def cmd_deploy_babysit(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    result = deploy.babysit(repo, _stage_dir(args), args.pr, args.harness, common.load_config(repo),
+                            dry_run=args.dry_run)
+    for line in result.lines:
+        print(line)
+    return 0
+
+
+def cmd_deploy_canary(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    print(deploy.canary(repo, args.item_id, args.tag, args.target, common.load_config(repo), dry_run=args.dry_run))
+    return 0
+
+
+def _print_production(run):
+    for line in run.lines:
+        print(line)
+    return 0
+
+
+def cmd_deploy_production(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    return _print_production(deploy.production(repo, args.source, args.item, common.load_config(repo), dry_run=args.dry_run))
+
+
+def cmd_deploy_history(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    for row in deploy.history(repo, common.load_config(repo), limit=args.limit):
+        print("{}  {}  {}  source {}  {}".format(
+            row["created"], row["status"], row["conclusion"] or "-", (row["source"] or "unknown")[:12], row["url"]))
+    return 0
+
+
+def cmd_deploy_rollback(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    config = common.load_config(repo)
+    target = args.to
+    if target is None:
+        current, target = deploy.rollback_source(deploy.history(repo, config, limit=30, dry_run=args.dry_run))
+        print("current production source {}, roll back to {}".format(current[:12], target[:12]))
+    return _print_production(deploy.production(repo, target, args.item, config, dry_run=args.dry_run))
+
+
+def cmd_deploy_build_docs(args):
+    from sdlc_lib import common, deploy
+
+    repo = _repo(args)
+    info = deploy.build_docs(repo, common.load_config(repo), args.source, Path(args.out))
+    print("built the docs of {} into {}".format(info["source"], args.out))
+    return 0
+
+
+def _add_deploy_parsers(sub):
+    """Stage: deploy (S5). Add the deploy command group."""
+    deploy_parser = sub.add_parser("deploy", help="Deploy stage: review, babysit, canary, production, rollback.")
+    dsub = deploy_parser.add_subparsers(dest="deploy_command", metavar="deploy-command")
+    dsub.required = True
+    repo_help = "Target repo. Default: the repo of the current folder."
+    stage_help = "Stage skill folder. Default: the skill folder that holds this engine."
+    dry_help = "Print the GitHub call. Do not call GitHub as the bot and do not read the bot token file."
+
+    p = dsub.add_parser("review-post", help="Rank the reviewer findings, write review.md, and post it as the bot.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-fix-login.")
+    p.add_argument("--findings", required=True, help="File with the reviewer output.")
+    p.add_argument("--pr", type=int, help="PR number. With no PR, the command writes review.md only.")
+    p.add_argument("--upstream", action="append", default=[], help="Upstream link. Repeat for more links.")
+    p.add_argument("--fallback", help="What the stage used with no upstream artifact. Default: PR description.")
+    p.add_argument("--dry-run", action="store_true", help=dry_help)
+    p.add_argument("--stage-dir", help=stage_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_review_post)
+
+    p = dsub.add_parser("babysit", help="Run one babysit round on a PR, up to the round limit.")
+    p.add_argument("pr", type=int, help="PR number.")
+    p.add_argument("--harness", required=True, help="Name of an [agent_runner.<harness>] table.")
+    p.add_argument("--dry-run", action="store_true", help="Read the PR with your login. Do not run the role, push, or post.")
+    p.add_argument("--stage-dir", help=stage_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_babysit)
+
+    p = dsub.add_parser("canary", help="Create a canary prerelease as the bot. Never a full release.")
+    p.add_argument("item_id", help="Work item ID.")
+    p.add_argument("--tag", required=True, help="New tag for the prerelease, for example v0.2.0-canary.1.")
+    p.add_argument("--target", help="Branch or commit for a new tag. Default: the default branch.")
+    p.add_argument("--dry-run", action="store_true", help=dry_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_canary)
+
+    p = dsub.add_parser("production", help="Start the production workflow on the default branch as the bot.")
+    p.add_argument("--source", help="Commit to deploy. It must be in the history of the default branch. Default: its head.")
+    p.add_argument("--item", help="Work item ID for the run name.")
+    p.add_argument("--dry-run", action="store_true", help=dry_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_production)
+
+    p = dsub.add_parser("history", help="List the recent production runs and their source commits.")
+    p.add_argument("--limit", type=int, default=10, help="Number of runs. Default: 10.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_history)
+
+    p = dsub.add_parser("rollback", help="Start the production workflow with the prior source commit.")
+    p.add_argument("--to", help="Commit to roll back to. Default: the source of the prior successful run.")
+    p.add_argument("--item", help="Work item ID for the run name.")
+    p.add_argument("--dry-run", action="store_true", help=dry_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_rollback)
+
+    p = dsub.add_parser("build-docs", help="CI: build the docs of a source commit for the production job.")
+    p.add_argument("--source", default="", help="Commit to build. Default: HEAD.")
+    p.add_argument("--out", required=True, help="Empty or absent output folder.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_deploy_build_docs)
+
+
+# Stage: maintain (S6). The maintain stage commands. -------------------------
+
+
+def cmd_detect(args):
+    from sdlc_lib import common, maintain
+
+    repo = _repo(args)
+    config = common.load_config(repo)
+    window = maintain.window_size(config)
+    metrics = maintain.select_metrics(repo, args.metric or None, args.command)
+    report = maintain.detect(repo, metrics, window, record=not args.dry_run)
+    for r in report.results:
+        if r.error:
+            print("{}: error: {}".format(r.metric, r.error))
+            continue
+        print("{}: value {} mean {} sigma {} z {} tier {}".format(
+            r.metric, maintain.fmt(r.value), maintain.fmt(r.mean) or "none",
+            maintain.fmt(r.sigma) or "none", maintain.fmt(r.z) or "none", r.tier))
+    if report.commit:
+        print("recorded the readings on the {} branch at {}".format(maintain.DATA_BRANCH, report.commit[:12]))
+    else:
+        print("dry run: recorded nothing")
+    if args.issues:
+        for line in _detect_issues(repo, config, report, maintain):
+            print(line)
+    return 1 if report.failed else 0
+
+
+def _detect_issues(repo, config, report, maintain):
+    """Write the issues. In GitHub Actions, use the job token. Else act as the bot."""
+    from sdlc_lib import github
+
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REPOSITORY"):
+        return maintain.file_issues(os.environ["GITHUB_REPOSITORY"], report)
+    slug = github.origin_slug(repo)
+    env = github.bot_env(config)
+    try:
+        return maintain.file_issues(slug, report, env=env)
+    finally:
+        github.cleanup(env)
+
+
+def cmd_readings(args):
+    from sdlc_lib import maintain
+
+    sys.stdout.write(maintain.readings_text(_repo(args), maintain.check_metric_name(args.metric)))
+    return 0
+
+
+def cmd_last_run(args):
+    from sdlc_lib import maintain
+
+    data = maintain.last_run(_repo(args))
+    if data is None:
+        print("no detect run recorded")
+        return 1
+    print(data["time"])
+    return 0
+
+
+def cmd_finding(args):
+    from sdlc_lib import maintain
+
+    repo = _repo(args)
+    item_id, path = maintain.new_finding(repo, _stage_dir(args), maintain.check_metric_name(args.metric),
+                                         issue=args.issue, lane=args.lane)
+    print(item_id)
+    print("wrote " + path.relative_to(repo).as_posix())
+    return 0
+
+
+def cmd_triage(args):
+    from sdlc_lib import maintain
+
+    repo = _repo(args)
+    path = maintain.triage(repo, args.item_id, args.decision, reason=args.reason, issue=args.issue)
+    print("wrote " + path.relative_to(repo).as_posix())
+    return 0
+
+
+def cmd_lesson(args):
+    from sdlc_lib import maintain
+
+    repo = _repo(args)
+    path = maintain.new_lesson(repo, _stage_dir(args), args.item_id, pr=args.pr)
+    print("wrote " + path.relative_to(repo).as_posix())
+    return 0
+
+
+def cmd_close_check(args):
+    from sdlc_lib import maintain
+
+    problems = maintain.close_check(_repo(args), args.item_id)
+    for line in problems:
+        print("FAIL " + line)
+    print("close-check: " + ("FAIL" if problems else "PASS"))
+    return 1 if problems else 0
+
+
+def _add_maintain_commands(sub):
+    repo_help = "Target repo. Default: the repo of the current folder."
+    stage_help = "Stage skill folder. Default: the skill folder that holds this engine."
+
+    p = sub.add_parser("detect", help="Measure the metrics and give each reading a tier. No model.")
+    p.add_argument("--metric", action="append", default=[], help="Measure only this metric. Repeat for more.")
+    p.add_argument("--command", help="Fallback: a command that prints a number. Needs one --metric.")
+    p.add_argument("--issues", action="store_true", help="Open or comment on one issue per metric and tier at 2 and 3 sigma.")
+    p.add_argument("--dry-run", action="store_true", help="Print the tiers. Record nothing.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_detect)
+
+    p = sub.add_parser("readings", help="Print the readings of a metric from the sdlc-data branch.")
+    p.add_argument("metric", help="Metric name.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_readings)
+
+    p = sub.add_parser("last-run", help="Print the time of the last recorded detect run.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_last_run)
+
+    p = sub.add_parser("finding", help="Make a work item and an intent.md draft from the last reading of a metric.")
+    p.add_argument("metric", help="Metric name.")
+    p.add_argument("--issue", type=int, help="Number of the detect issue.")
+    p.add_argument("--lane", choices=("fast", "full"), default="full", help="Proposed lane. The human sets it at the Plan gate.")
+    p.add_argument("--stage-dir", help=stage_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_finding)
+
+    p = sub.add_parser("triage", help="Add a triage decision for a finding.")
+    p.add_argument("item_id", help="Work item ID of the finding.")
+    p.add_argument("--decision", required=True, choices=("fix-now", "schedule", "dismiss"), help="The decision of the gate owner.")
+    p.add_argument("--reason", help="The reason. A dismiss needs one.")
+    p.add_argument("--issue", type=int, help="Number of the detect issue.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_triage)
+
+    p = sub.add_parser("lesson", help="Write a lessons entry draft for a merged bug fix.")
+    p.add_argument("item_id", help="Work item ID of the bug fix.")
+    p.add_argument("--pr", type=int, help="Number of the merged fix PR.")
+    p.add_argument("--stage-dir", help=stage_help)
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_lesson)
+
+    p = sub.add_parser("close-check", help="Check that a bug fix has its eval task and its lesson.")
+    p.add_argument("item_id", help="Work item ID of the bug fix.")
+    p.add_argument("--repo", help=repo_help)
+    p.set_defaults(func=cmd_close_check)
+
+
+# End of stage: maintain. ------------------------------------------------------
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="sdlc.py", description="opieworks-sdlc engine."
@@ -356,6 +873,8 @@ def build_parser():
     group.add_argument("--body-file", help="File with the PR body.")
     p.add_argument("--head", help="Head branch. Default: the current branch.")
     p.add_argument("--base", help="Base branch. Default: the default branch of the repo.")
+    p.add_argument("--label", action="append", default=[],
+                   help="Label to add as the bot, for example sdlc:design. The bot makes a missing label. Repeat for more.")
     p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
     p.set_defaults(func=cmd_pr)
 
@@ -395,6 +914,25 @@ def build_parser():
     p.add_argument("--stage-dir", help="Stage skill folder for role names. Default: the skill folder that holds this engine.")
     p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
     p.set_defaults(func=cmd_run_evals)
+
+    # Stage: build (S3).
+    p = sub.add_parser("plan-init", help="Write the plan.md skeleton of a work item for the planner.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-fix-login.")
+    p.add_argument("--lane", choices=("fast", "full"), help="Lane. Default: the lane in item.toml or intent.md.")
+    p.add_argument("--request", help="The user request. Needed when the work item has no intent.md or spec.md.")
+    p.add_argument("--upstream", action="append", default=[], help="Upstream link. Repeat for more links.")
+    p.add_argument("--fallback", help="What the stage used with no upstream artifact. Default: user request.")
+    p.add_argument("--stage-dir", help="Stage skill folder. Default: the skill folder that holds this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_plan_init)
+
+    p = sub.add_parser("build-check", help="Check a work item before the next build step.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-fix-login.")
+    p.add_argument("--phase", required=True, choices=("plan", "test", "code"), help="The build step to check.")
+    p.add_argument("--base", help="Base branch for the code phase. Default: origin/HEAD, else main.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_build_check)
+    # End of stage: build.
 
     for name, func, text in (
         ("resolve", cmd_resolve, "Print the file that a relative path resolves to."),
@@ -448,6 +986,34 @@ def build_parser():
         help="Export with no leak denylist. The scan then cannot find personal names.",
     )
     p.set_defaults(func=cmd_export)
+
+    # Stage: intent (slice S2)
+    add_intent_parsers(sub)
+
+    # Stage: design (S4)
+    p = sub.add_parser("policies", help="Print the configured design policy files.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_policies)
+
+    p = sub.add_parser("spec", help="Check a spec draft and write spec.md.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-add-search.")
+    p.add_argument("--draft", required=True, help="File with the spec draft of the spec-writer role.")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--problem", help="Inline problem statement, when the work item has no intent.md.")
+    group.add_argument("--problem-file", help="File with the inline problem statement.")
+    p.add_argument("--upstream", action="append", default=[], help="Upstream link. Repeat for more links.")
+    p.add_argument("--stage-dir", help="Stage skill folder. Default: the skill folder that holds this engine.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_spec)
+
+    p = sub.add_parser("spec-check", help="Check spec.md. Exit 1 while a flag is open.")
+    p.add_argument("item_id", help="Work item ID, for example 20261010-add-search.")
+    p.add_argument("--repo", help="Target repo. Default: the repo of the current folder.")
+    p.set_defaults(func=cmd_spec_check)
+    # End of stage: design
+
+    _add_deploy_parsers(sub)  # Stage: deploy (S5)
+    _add_maintain_commands(sub)  # Stage: maintain (S6).
 
     return parser
 

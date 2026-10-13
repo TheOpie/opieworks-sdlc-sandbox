@@ -1,0 +1,63 @@
+# Managed by opieworks-sdlc. Setup rewrites this file. Do not edit it.
+#
+# FR-63: this workflow is the only path to production. Its job is bound to
+# the protected environment "production". `sdlc.py gates apply` sets the
+# environment rules: a human required reviewer, self-review prevented, and
+# the default branch as the only deployment branch. The bot can start this
+# workflow. It cannot approve the deployment.
+#
+# FR-64: a rollback is a run of this workflow with an older source commit.
+# The engine refuses a source that is not in the history of the default
+# branch, so production gets only commits that a human merged.
+name: sdlc-deploy-production
+run-name: production ${{ inputs.source_sha }} (${{ inputs.work_item }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Commit to build and deploy. It must be in the history of the default branch.
+        required: true
+        type: string
+      work_item:
+        description: Work item ID, or none.
+        required: false
+        default: none
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdlc-production
+  cancel-in-progress: false
+
+jobs:
+  production:
+    name: production
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Check out the default branch commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build the docs of the source commit
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 sdlc/.engine/sdlc.py deploy build-docs --source "$SOURCE_SHA" --out "$RUNNER_TEMP/site"
+      - name: Upload the docs build
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

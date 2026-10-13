@@ -1,0 +1,4 @@
+# FR-71: at tier propose, the diagnoser proposes one change.
+role = "diagnoser"
+inputs = ["sdlc/evals/fixtures/maintain-intent-propose.md", "sdlc/evals/fixtures/maintain-readings-propose.csv", "sdlc/evals/fixtures/maintain-commits.txt"]
+check = "grep -Ei '^proposed change:' \"$EVAL_OUTPUT\" | grep -viq 'none'"

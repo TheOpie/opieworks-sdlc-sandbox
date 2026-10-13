@@ -43,6 +43,31 @@ ISOLATION_ENV = {
 # entries that the caller already has.
 GIT_ISOLATION_CONFIG = (("credential.helper", ""), ("core.askPass", ""))
 
+# D22: the role process gets only allowlisted names from the parent env. The
+# parent env can hold many keys for other services. A role could copy one into
+# evidence that goes into a commit. Each name here is not a secret.
+BASE_ENV_ALLOWLIST = (
+    "PATH",  # The harness and the verify tools are found through PATH.
+    "HOME",  # The harness reads its config and its login from the home folder.
+    "USER",  # Some tools and the system keychain lookup use the user name.
+    "LOGNAME",  # The same as USER on some systems.
+    "SHELL",  # The harness runs commands in this shell.
+    "TMPDIR",  # The temp folder. macOS sets a per-user folder here.
+    "TMP",  # The temp folder name that some tools read.
+    "TEMP",  # The temp folder name that some tools read.
+    "LANG",  # The text encoding of tool output.
+    "TERM",  # The terminal type for tool output.
+    "COLORTERM",  # The color support of the terminal.
+    "TZ",  # The time zone for times in logs and evidence.
+    "NO_COLOR",  # Tools give output without color codes when it is set.
+    # The isolation adds git config entries after the entries of the caller.
+    # Keep the caller entries, for example safe.directory in CI.
+    "GIT_CONFIG_COUNT",
+)
+# Names that start with these parts pass too. LC_* sets the locale. The
+# GIT_CONFIG_* parts are the caller entries that GIT_CONFIG_COUNT counts.
+BASE_ENV_PREFIXES = ("LC_", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
 # Capabilities that select a flag map, weakest first. The strongest one wins.
 FLAG_CAPABILITIES = ("read", "run", "edit")
 BOT_CAPABILITY = "github-bot"
@@ -191,6 +216,25 @@ def _is_human_credential(key: str, value: str) -> bool:
     return any(regex.search(value) for regex in _GITHUB_TOKEN_SHAPES)
 
 
+def allowed_env_names(harness: str, config: dict) -> set[str]:
+    """Return the env names that a role process can get from the parent env.
+
+    The names are BASE_ENV_ALLOWLIST, the env list of [agent_runner.<harness>],
+    and the env list of [roles]. Names with a BASE_ENV_PREFIXES part also pass.
+    """
+    names = set(BASE_ENV_ALLOWLIST)
+    runners = config.get("agent_runner")
+    table = runners.get(harness) if isinstance(runners, dict) else None
+    if isinstance(table, dict) and "env" in table:
+        names.update(_str_list(table["env"], f"[agent_runner.{harness}] env"))
+    roles = config.get("roles", {})
+    if not isinstance(roles, dict):
+        raise SdlcError("[roles] must be a table in sdlc/config.toml.")
+    if "env" in roles:
+        names.update(_str_list(roles["env"], "[roles] env"))
+    return names
+
+
 def _add_git_config(env: dict[str, str]) -> None:
     """Add GIT_ISOLATION_CONFIG after the GIT_CONFIG_* entries that env has."""
     try:
@@ -238,8 +282,14 @@ def build_invocation(
     prompt = "\n".join([spec.body.strip("\n"), "", *task_lines, "Inputs:", *(str(item) for item in inputs)])
     argv = command + flags + [prompt]
 
+    # The allowlist comes first. A GitHub credential is removed also when the
+    # config allows its name.
+    names = allowed_env_names(harness, config)
     source = os.environ if base_env is None else base_env
-    env = {key: value for key, value in source.items() if not _is_human_credential(key, value)}
+    env = {
+        key: value for key, value in source.items()
+        if (key in names or key.startswith(BASE_ENV_PREFIXES)) and not _is_human_credential(key, value)
+    }
     env.update(ISOLATION_ENV)
     _add_git_config(env)
 

@@ -27,3 +27,6 @@ command = ["codex", "exec"]
 read = ["-s", "read-only"]
 run = ["-s", "read-only"]
 edit = ["-s", "workspace-write"]
+
+[build]
+test = "pnpm verify"

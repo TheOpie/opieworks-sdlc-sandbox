@@ -1,0 +1,4 @@
+# The diagnoser names the commit that moved the metric.
+role = "diagnoser"
+inputs = ["sdlc/evals/fixtures/maintain-intent-diagnose.md", "sdlc/evals/fixtures/maintain-readings-diagnose.csv", "sdlc/evals/fixtures/maintain-commits.txt"]
+check = "grep -Fq '4e1c9a7' \"$EVAL_OUTPUT\""
