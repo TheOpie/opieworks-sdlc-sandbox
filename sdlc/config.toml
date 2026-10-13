@@ -33,3 +33,12 @@ test = "pnpm verify"
 
 [design]
 policies = ["sdlc/policies/sample-policy.md"]
+
+[deploy]
+nit_cap = 3
+babysit_rounds = 3
+docs_dir = "docs"
+docs_build = ""
+
+[maintain]
+window = 30
