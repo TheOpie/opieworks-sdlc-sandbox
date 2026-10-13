@@ -9,12 +9,15 @@ export interface IconButtonOptions {
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** A button that shows only an icon. */
-export function createIconButton(options: IconButtonOptions): HTMLElement {
-  const button = document.createElement("div");
+export function createIconButton(options: IconButtonOptions): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
   button.className = "icon-button";
+  button.setAttribute("aria-label", options.label);
 
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
   const path = document.createElementNS(SVG_NS, "path");
   path.setAttribute("d", options.iconPath);
   svg.appendChild(path);
